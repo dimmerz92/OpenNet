@@ -1,0 +1,28 @@
+name: Documentation issue
+description: Report inaccurate, unclear, or incomplete non-normative documentation.
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Document and section
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+  - type: checkboxes
+    id: normative
+    attributes:
+      label: Normative impact
+      options:
+        - label: I have checked whether this conflicts with or changes normative specification behaviour.
+          required: true

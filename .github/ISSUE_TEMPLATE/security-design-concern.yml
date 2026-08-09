@@ -1,0 +1,30 @@
+name: Public security design concern
+description: Discuss a non-sensitive security concern that does not disclose an exploitable vulnerability.
+title: "[Security design]: "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not use this form for an undisclosed exploitable vulnerability. Report that privately through the Security tab.
+  - type: input
+    id: target
+    attributes:
+      label: Affected specification, requirement, or component
+    validations:
+      required: true
+  - type: textarea
+    id: concern
+    attributes:
+      label: Concern
+    validations:
+      required: true
+  - type: textarea
+    id: threat
+    attributes:
+      label: Threat model and consequences
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested mitigation or investigation

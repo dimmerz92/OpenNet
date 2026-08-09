@@ -1,0 +1,55 @@
+name: Pre-v1 specification change
+description: Propose a normative specification change before v1 is published.
+title: "[Spec change]: "
+labels: ["specification", "pre-v1"]
+body:
+  - type: markdown
+    attributes:
+      value: This form is valid only before v1. Published v1 cannot be changed.
+  - type: input
+    id: target
+    attributes:
+      label: Specification and section
+    validations:
+      required: true
+  - type: input
+    id: requirements
+    attributes:
+      label: Requirement IDs
+      description: List every known affected requirement ID.
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed normative behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: justification
+    attributes:
+      label: Why this is needed
+      description: Address interoperability, security, observable behaviour, resource safety, and conformance.
+    validations:
+      required: true
+  - type: textarea
+    id: freedom
+    attributes:
+      label: Effect on implementation freedom
+      description: Explain why the proposal does not mandate unnecessary internal details.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration consequences
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence, examples, or proposed vectors

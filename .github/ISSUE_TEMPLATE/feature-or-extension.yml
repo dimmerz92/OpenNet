@@ -1,0 +1,38 @@
+name: Feature, profile, or extension
+description: Propose implementation functionality or behaviour outside the immutable v1 core.
+title: "[Proposal]: "
+labels: ["proposal"]
+body:
+  - type: dropdown
+    id: classification
+    attributes:
+      label: Classification
+      options:
+        - Implementation feature
+        - Profile
+        - Compatible extension
+        - Experimental successor
+        - Derivative
+        - Fork
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and negotiation behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Relationship to v1
+      description: Explain why this does not silently redefine published v1.
+    validations:
+      required: true

@@ -1,0 +1,27 @@
+name: Research or practical evidence
+description: Provide evidence relevant to a pre-v1 design question or implementation decision.
+title: "[Evidence]: "
+labels: ["research"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question or claim addressed
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and sources
+    validations:
+      required: true
+  - type: textarea
+    id: uncertainty
+    attributes:
+      label: Uncertainty or conflicting evidence
+    validations:
+      required: true
+  - type: input
+    id: affected
+    attributes:
+      label: Affected specifications, requirements, or components

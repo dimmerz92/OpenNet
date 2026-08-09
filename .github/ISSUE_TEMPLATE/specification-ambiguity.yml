@@ -1,0 +1,34 @@
+name: Pre-v1 specification ambiguity
+description: Report materially different interpretations before v1 is published.
+title: "[Spec ambiguity]: "
+labels: ["specification", "ambiguity", "pre-v1"]
+body:
+  - type: markdown
+    attributes:
+      value: This form is valid only before v1. After v1, use the erratum or conformance form.
+  - type: input
+    id: target
+    attributes:
+      label: Specification, section, and requirement IDs
+    validations:
+      required: true
+  - type: textarea
+    id: interpretations
+    attributes:
+      label: Competing interpretations
+    validations:
+      required: true
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Interoperability, security, or conformance consequences
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Suggested resolution and reasoning
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Reproduction, implementation evidence, or references

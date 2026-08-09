@@ -1,0 +1,30 @@
+name: Published v1 erratum report
+description: Record a possible defect in immutable published v1 without changing it.
+title: "[v1 erratum]: "
+labels: ["v1-erratum"]
+body:
+  - type: markdown
+    attributes:
+      value: An accepted erratum does not modify v1 normative meaning. Behavioural changes belong in an extension, successor, derivative, or fork.
+  - type: input
+    id: target
+    attributes:
+      label: Published v1 section and requirement IDs
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: Possible defect
+    validations:
+      required: true
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Security, interoperability, or conformance consequences
+    validations:
+      required: true
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Compliant implementation mitigation or successor proposal
