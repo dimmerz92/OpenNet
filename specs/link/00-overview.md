@@ -17,8 +17,8 @@ A medium is adapted into a compliant link by a shim that satisfies the shim inte
 - Media enumeration, observation, and link selection policy.
 - Service primitives, link lifecycle, and multi-link multiplexing.
 - Adaptation for arbitrary physical and link carriers, including Ethernet, Wi-Fi, Bluetooth, LoRa, arbitrary datagram links, stream links, packet-oriented links, high-latency links, lossy links, intermittent links, one-way links, broadcast and multicast media, audio, optical, and unconventional links. These are non-normative examples; this specification does not enumerate media.
-- Framing, maximum transmission unit (MTU), and maximum packet size.
-- Fragmentation and reassembly within the Link layer.
+- Framing and maximum transmission unit (MTU).
+- Fragmentation, reassembly, and maximum packet size within the Link layer.
 - Link-level addressing and neighbour discovery.
 - Link quality, loss, retransmission, ordering, and duplication.
 - Link-local congestion and maximum packet size interactions.
@@ -101,13 +101,13 @@ A structured report of a medium's properties produced by a shim. Its reported pr
 A byte sequence carried by a link. Payloads are opaque to the Link layer.
 
 **Frame**
-The complete unit exchanged between the link service and a shim, defined by this specification as a single generic frame format used across all media (LINK-OVR-022). A frame carries one or more payload fragments, control information, and link-layer addressing as defined in sections 03 and 05. A shim translates between the generic frame and the medium's native transport; one generic frame need not correspond to exactly one native transport unit.
+The complete unit exchanged between the link service and a shim, defined by this specification as a single generic frame format used across all media (LINK-OVR-022). A Data frame carries one complete Network payload or one fragment, while a Control frame carries Link-owned protocol information. Applicable Link header fields include the addressing defined in section 05. A shim translates between the generic frame and the medium's native transport; one generic frame need not correspond to exactly one native transport unit.
 
 **Maximum transmission unit (MTU)**
 The maximum frame size a link reports it can carry without further fragmentation. The MTU varies per link between a guaranteed minimum and a global maximum frame size; both bounds are defined in section 03.
 
 **Maximum packet size**
-The maximum payload size the Link layer accepts from the Network layer. Defined in section 03.
+The maximum payload size the Link layer accepts from the Network layer in one `Send` invocation. It may exceed the MTU through Link fragmentation and is defined in section 04 using the framing capacity established in section 03.
 
 **Node**
 A device or entity that implements the OpenNet stack and participates in communication over one or more links.

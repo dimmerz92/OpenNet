@@ -22,7 +22,7 @@ The Link layer MUST NOT fragment a payload submitted by the Network layer across
 
 Each link MUST report a current maximum transmission unit (MTU) to the Network layer (LINK-SVC-007). The reported MTU is bounded below by the guaranteed minimum MTU and above by the global maximum frame size; both bounds are defined in section 03 (LINK-SVC-008), restating LINK-OVR-029. The reported MTU MAY change over the life of a link within these bounds; a change is surfaced by the `Link-Changed` primitive (section 4.6).
 
-A link MUST additionally report its maximum packet size, the largest payload the Network layer may submit, which differs from the MTU when the generic frame carries overhead the Network layer does not see (LINK-SVC-010). The relationship between maximum packet size, MTU, and frame overhead is defined in section 03. The reported maximum packet size MAY change over the life of a link; a change is surfaced by the `Link-Changed` primitive.
+A link MUST additionally report its maximum packet size, the largest payload the Network layer may submit in one `Send` invocation (LINK-SVC-010). Maximum packet size MAY exceed the MTU because the Link layer may fragment one Network payload into multiple generic frames. Section 03 defines the MTU and generic-frame capacity; section 04 defines maximum packet size using that capacity and its fragmentation and reassembly bounds. The reported maximum packet size MAY change over the life of a link; a change is surfaced by the `Link-Changed` primitive.
 
 The Link layer MUST reject, without sending, any payload whose length exceeds the link's currently reported maximum packet size (LINK-SVC-009). The Link layer MAY reject a payload that is otherwise malformed; behaviour for malformed submit input is defined in section 7.
 
@@ -150,7 +150,7 @@ The `Link-Up` primitive indicates that a link has become available for use (LINK
 - `descriptor`: the validated capability descriptor for the link as defined in section 02; a snapshot of the link-service-owned authoritative copy (section 6.3).
 - `epoch`: a generation value identifying the link's current medium binding (LINK-SVC-082).
 - `mtu`: the current MTU derived by the link service under section 03.
-- `max_packet_size`: the current maximum packet size derived by the link service under section 03.
+- `max_packet_size`: the current maximum packet size derived by the link service under section 04 using the framing inputs defined in section 03.
 
 **Constraints and ordering:**
 
@@ -190,7 +190,7 @@ The `Link-Changed` primitive indicates that a capability or reported service siz
 - `link_id`: the handle of the link whose capability has changed.
 - `descriptor`: the validated capability descriptor reflecting the new values, as defined in section 02.
 - `mtu`: the new current MTU derived by the link service under section 03.
-- `max_packet_size`: the new current maximum packet size derived by the link service under section 03.
+- `max_packet_size`: the new current maximum packet size derived by the link service under section 04 using the framing inputs defined in section 03.
 - `change_set`: an enumeration of every changed value. Descriptor fields use the `descriptor.` namespace and service values use `service.mtu` and `service.max_packet_size`; the normative descriptor field-set is defined in section 02.
 
 **Constraints and ordering:**
@@ -348,7 +348,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-SVC-007**: Each link MUST report a current MTU to the Network layer.
 - **LINK-SVC-008**: The reported MTU is bounded below by the guaranteed minimum MTU and above by the global maximum frame size; both defined in section 03.
 - **LINK-SVC-009**: The Link layer MUST reject, without sending, any payload whose length exceeds the link's currently reported maximum packet size.
-- **LINK-SVC-010**: A link MUST report its maximum packet size, the largest payload the Network layer may submit; it MAY change over the life of a link, surfaced by `Link-Changed`. The relationship to MTU and frame overhead is defined in section 03.
+- **LINK-SVC-010**: A link MUST report its maximum packet size, the largest payload the Network layer may submit in one `Send` invocation; it MAY exceed the MTU through Link fragmentation and MAY change over the life of a link, surfaced by `Link-Changed`. Section 03 defines MTU and generic-frame capacity; section 04 defines maximum packet size using that capacity and its fragmentation and reassembly bounds.
 - **LINK-SVC-011**: The default delivery semantic of a link is best-effort.
 - **LINK-SVC-012**: By default a link MUST NOT be assumed to deliver every submitted payload.
 - **LINK-SVC-013**: By default a link MUST NOT be assumed to deliver payloads in submission order.
