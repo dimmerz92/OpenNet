@@ -150,13 +150,13 @@ The `Link-Up` primitive indicates that a link has become available for use (LINK
 - `descriptor`: the validated capability descriptor for the link as defined in section 02; a snapshot of the link-service-owned authoritative copy (section 6.3).
 - `epoch`: a generation value identifying the link's current medium binding (LINK-SVC-082).
 - `mtu`: the current MTU derived by the link service under section 03.
-- `max_packet_size`: the current maximum packet size derived by the link service under section 04 using the framing inputs defined in section 03.
+- `max_packet_size`: the current maximum packet size derived by the link service under section 04 using the framing inputs defined in section 03. A receive-only link reports the section 04 no-send sentinel of zero.
 
 **Constraints and ordering:**
 
 - A link is considered available only after `Link-Up` has been emitted and before any subsequent `Link-Down` for the same `link_id` (LINK-SVC-037).
 - The Network layer MAY begin issuing `Send` after either `Link-Up` or an authoritative `Available` baseline returned by `Link-Query` or `Enumerate-Links` for that `link_id` (LINK-SVC-038).
-- The descriptor, epoch, MTU, and maximum packet size carried by one `Link-Up` MUST form one internally coherent tuple observed at the event's logical emission point (LINK-SVC-093).
+- The descriptor, epoch, MTU, and maximum packet size carried by one `Link-Up` MUST form one internally coherent tuple observed at the event's logical emission point (LINK-SVC-093). A receive-only tuple carries `max_packet_size` equal to zero. A send-capable tuple with no currently valid destination either carries zero or is not made `Available`, as defined by sections 04 and 05.
 - `Link-Up` MUST NOT be emitted for a `link_id` that is currently `Available` (LINK-SVC-049).
 - The `epoch` carried by `Link-Up` MUST differ from the epoch of every previous `Link-Up` for the same `link_id`; each `Link-Up` begins a distinct availability episode of the continuing binding (LINK-SVC-082). The epoch space is implementation-defined, but an implementation MUST retire the binding or otherwise fail safely before it would reuse an epoch for that `link_id` during the host run.
 - The Network layer MUST treat a changed `epoch` for a `link_id` as invalidating all state associated with the previous epoch, including `(link_id, epoch, dest_link_addr)` and `(link_id, epoch, src_link_addr)` mappings (LINK-SVC-082).
@@ -190,7 +190,7 @@ The `Link-Changed` primitive indicates that a capability or reported service siz
 - `link_id`: the handle of the link whose capability has changed.
 - `descriptor`: the validated capability descriptor reflecting the new values, as defined in section 02.
 - `mtu`: the new current MTU derived by the link service under section 03.
-- `max_packet_size`: the new current maximum packet size derived by the link service under section 04 using the framing inputs defined in section 03.
+- `max_packet_size`: the new current maximum packet size derived by the link service under section 04 using the framing inputs defined in section 03, including the zero no-send sentinel where applicable.
 - `change_set`: an enumeration of every changed value. Descriptor fields use the `descriptor.` namespace and service values use `service.mtu` and `service.max_packet_size`; the normative descriptor field-set is defined in section 02.
 
 **Constraints and ordering:**
@@ -431,7 +431,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-SVC-090**: Overlapping `Send` rejection conditions MUST be resolved in this order: unrecognised identifier, non-`Available` lifecycle or closed down admission, stale epoch, unsupported direction, malformed or zero-length payload, invalid destination, packet size, then queue capacity.
 - **LINK-SVC-091**: `Receive` MUST be emitted only while the link is `Available` and MUST carry the epoch of that availability episode.
 - **LINK-SVC-092**: A reception admitted before the down cut-off MUST be delivered before `Link-Down` or discarded observably; pre-up and post-cut-off receptions MUST be discarded and MUST NOT cross into a later epoch.
-- **LINK-SVC-093**: The descriptor, epoch where applicable, MTU, and maximum packet size carried by one lifecycle event MUST form one internally coherent tuple at its logical emission point.
+- **LINK-SVC-093**: The descriptor, epoch where applicable, MTU, and maximum packet size carried by one lifecycle event MUST form one internally coherent tuple at its logical emission point, including a zero no-send sentinel for receive-only links and the section 04/05 empty-destination case.
 - **LINK-SVC-094**: Before a service-originated `Link-Down`, one cut-off closes service admission and classifies all service-owned and shim-owned work; after the event the service stops and retires the binding. Shim-originated temporary loss provides an equivalent cut-off but may retain the binding pending recovery.
 - **LINK-SVC-095**: Before a reduced tuple becomes authoritative, every send is linearised under the old or new tuple, all service-owned work is classified, and shim-owned work completes or returns; bounded admission exhaustion may return `rejected-queue-full`.
 - **LINK-SVC-096**: Later Link Specification sections MAY add service primitives required to expose mechanisms they own, provided those primitives preserve this section's layering, opacity, lifecycle, and conformance invariants; the Link layer exposes link-local facts while the Network layer owns identity correlation and next-hop selection.
