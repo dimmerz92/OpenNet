@@ -65,13 +65,13 @@ The global maximum Network packet size is 65,535 bytes (LINK-FRG-014). No sender
 
 ### 3.2 Meaning of the reported value
 
-The `max_packet_size` reported by a link is the largest Network payload the local Link service can currently accept, fragment, and submit on that link under its MTU, destination set, mandatory headers, fragment-count ceiling, and bounded local transmit configuration (LINK-FRG-015). It is a local send capability, not a promise of remote receipt, remote reassembly capacity, or delivery. A receive-only link MUST report `max_packet_size` as zero. A send-capable link with no currently valid destination MUST either report zero or remain unavailable, as determined by the section 05 destination model. Zero is a no-send sentinel and is not a valid Network payload size.
+The `max_packet_size` reported by a link is the largest Network payload the local Link service can accept, fragment, and submit for every destination and source form within the current validated capability envelope under its MTU, mandatory headers, fragment-count ceiling, and bounded local transmit configuration (LINK-FRG-015). It is a stable conservative local send capability, not a promise of remote receipt, remote reassembly capacity, or delivery. A receive-only link MUST report `max_packet_size` as zero. A send-capable link with no usable destination MAY still report the value derived from its validated capability envelope, although individual `Send` calls remain subject to section 05 destination admission. Zero is a no-send sentinel and is not a valid Network payload size.
 
 Every receive-capable implementation MUST configure a local fragmented-packet reassembly limit from 256 through 65,535 inclusive (LINK-FRG-016). A fragmented packet declaring a larger Packet Length is discarded as `reassembly-packet-size-exceeded`. The receive limit is a local resource bound and is not added to the section 02 capability descriptor by this section.
 
 ### 3.3 Capacity derivation
 
-For a send-capable link with at least one currently valid destination, the Link service determines the body capacity under section 03 for every such destination and required fragmented-frame shape. Let `minimum_fragment_body_capacity` be the smallest positive capacity across those destinations and shapes, including the larger offset-zero header carrying Packet CRC-32C (LINK-FRG-017). Optional Link padding MUST be omitted or reduced when necessary and MUST NOT reduce the reported capability. No minimum is taken over an empty destination set.
+For a send-capable link, the Link service determines the body capacity under section 03 for every destination form, source form, maximum permitted address length, and required fragmented-frame shape that the current validated descriptor, neighbour mode, and adapter profile can produce. Let `minimum_fragment_body_capacity` be the smallest positive capacity across that stable capability envelope, including the larger offset-zero header carrying Packet CRC-32C (LINK-FRG-017). Optional Link padding MUST be omitted or reduced when necessary and MUST NOT reduce the reported capability. Observation arrival, refresh, expiry, ambiguity, eviction, or route replacement does not change this envelope.
 
 The reported value MUST satisfy (LINK-FRG-018):
 
@@ -83,9 +83,9 @@ max_packet_size = min(
 )
 ```
 
-The multiplication MUST be evaluated without integer wrap. For a send-capable link with a non-empty valid destination set, the configured transmit packet limit and calculated result MUST each be at least 256. A smaller configured limit is invalid for an available send-capable tuple and MUST NOT be silently clamped. Section 05 defines addressing overhead and MUST preserve at least one fragment-body byte for every valid destination at the guaranteed 256-byte MTU (LINK-FRG-019). A send-capable link that cannot satisfy the guaranteed packet size for its current non-empty valid destination set cannot become or remain `Available` with that tuple. The formula does not apply when `max_packet_size` is the zero sentinel.
+The multiplication MUST be evaluated without integer wrap. For a send-capable link, the configured transmit packet limit and calculated result MUST each be at least 256. A smaller configured limit is invalid for an available send-capable tuple and MUST NOT be silently clamped. Section 05 defines addressing overhead and MUST preserve at least one fragment-body byte for every form in the validated capability envelope at the guaranteed 256-byte MTU (LINK-FRG-019). A send-capable link that cannot satisfy the guaranteed packet size for that envelope cannot become or remain `Available` with that tuple. The formula does not apply when `max_packet_size` is the zero sentinel.
 
-A change to MTU, mandatory header overhead, valid destination forms, or configured transmit limit that changes `max_packet_size` is surfaced through the coherent `Link-Changed` tuple and size-change barrier defined in sections 01 and 02 (LINK-FRG-020).
+A change to MTU, the validated capability envelope, mandatory header overhead, or configured transmit limit that changes `max_packet_size` is surfaced through the coherent `Link-Changed` tuple and size-change barrier defined in sections 01 and 02 (LINK-FRG-020). Ordinary neighbour-table churn MUST NOT change the reported value.
 
 ## 4. Send fragmentation
 
@@ -134,11 +134,11 @@ If the remaining uncovered ranges cannot complete within the new frame-size, pac
 
 The reassembly key is the tuple `(link_id, availability_epoch, sender_incarnation_discriminator, Packet Identifier)` (LINK-FRG-034). No context or tombstone is shared across a different tuple component.
 
-For a multi-sender link, section 05 MUST provide a stable sender incarnation discriminator that changes before a sender can lose and reuse its Packet Identifier allocation state (LINK-FRG-035). An incarnation-specific source Link address, explicit neighbour incarnation, or equivalent adapter-profile value may satisfy this contract. A persistent source address alone is insufficient if identifier state can restart beneath it. A point-to-point profile with one possible peer may use its binding-specific peer incarnation.
+For a multi-sender link, the section 05 Sender Incarnation is the reassembly discriminator and MUST change before a sender can lose and reuse its Packet Identifier allocation state (LINK-FRG-035). It may be packet-scoped when no source address is present. An `implicit-peer` profile may instead supply its binding-specific peer incarnation under LINK-ADR-021. A source address without its incarnation is insufficient.
 
 ### 5.2 Validation before allocation
 
-The Link service MUST validate section 03 framing and then apply the following section 04 semantic order before allocating or extending a reassembly context (LINK-FRG-036):
+The Link service MUST complete section 03 framing and section 05 addressing, incarnation, expiry, and local-destination validation before applying the following section 04 semantic order or allocating or extending a reassembly context (LINK-FRG-036):
 
 1. validate the complete fragmentation-field form, field lengths, field placement, and non-empty body;
 2. expire any context or tombstone whose deadline is reached at the frame's logical observation point;
@@ -354,12 +354,12 @@ This summary is a navigation aid. The normative prose above is authoritative.
 - **LINK-FRG-012**: Fragment body excludes Link padding, which occupies no packet range and no packet CRC input.
 - **LINK-FRG-013**: Send-capable implementations accept at least a 256-byte packet for transmission and receive-capable implementations reassemble at least a 256-byte packet when bounded resources are available.
 - **LINK-FRG-014**: Global maximum packet size is 65,535 bytes.
-- **LINK-FRG-015**: Reported `max_packet_size` is a local current send capability; receive-only links report zero and a send-capable link without a valid destination reports zero or remains unavailable.
+- **LINK-FRG-015**: Reported `max_packet_size` is a stable conservative local send capability across the validated addressing envelope; receive-only links report zero.
 - **LINK-FRG-016**: Each receiver configures a fragmented-packet reassembly limit from 256 through 65,535; larger declarations are discarded.
-- **LINK-FRG-017**: For a non-empty valid destination set, minimum fragment-body capacity is conservative across destinations and required shapes, including offset zero, without optional padding reduction.
+- **LINK-FRG-017**: Minimum fragment-body capacity is conservative across every form in the stable validated capability envelope, including offset zero, without optional padding reduction.
 - **LINK-FRG-018**: A send-capable reported maximum is the specified minimum of configured limit, global maximum, and 256 times minimum fragment capacity; an available non-zero send capability is never silently clamped below 256.
-- **LINK-FRG-019** (specification-suite invariant): Section 05 preserves positive fragment capacity at minimum MTU; a link unable to provide the guaranteed packet size cannot be Available.
-- **LINK-FRG-020**: A change affecting reported maximum packet size uses the coherent `Link-Changed` tuple and size-change barrier.
+- **LINK-FRG-019** (specification-suite invariant): Section 05 preserves positive fragment capacity for the capability envelope at minimum MTU; a link unable to provide the guaranteed packet size cannot be Available.
+- **LINK-FRG-020**: Only a change to the capacity envelope or its sizing inputs changes the reported value and uses the coherent size-change barrier.
 - **LINK-FRG-021**: `Send` atomically validates and reserves all state required for whole-packet ownership before acceptance.
 - **LINK-FRG-022**: Local transmit resource failure returns `rejected-queue-full` before fragment emission.
 - **LINK-FRG-023**: Accepted packet identifier, length, CRC, destination, and bytes remain fixed during transmission ownership.
@@ -374,8 +374,8 @@ This summary is a navigation aid. The normative prose above is authoritative.
 - **LINK-FRG-032**: Size reduction lets committed frames complete and reframes only uncommitted uncovered ranges under the new tuple without resending committed bytes solely for the change.
 - **LINK-FRG-033**: A remainder unrepresentable under the reduced tuple is observably abandoned as `send-invalidated-by-size-change`.
 - **LINK-FRG-034**: Reassembly key is link, local epoch, sender incarnation, and Packet Identifier.
-- **LINK-FRG-035** (specification-suite invariant): Section 05 or the adapter profile supplies a stable sender incarnation discriminator with safe change semantics.
-- **LINK-FRG-036**: Receive validation follows the specified semantic precedence before allocation or extension, and tombstone matches have defined non-refreshing outcomes.
+- **LINK-FRG-035** (specification-suite invariant): Section 05 Sender Incarnation or the implicit-peer profile supplies the restart-safe reassembly discriminator.
+- **LINK-FRG-036**: Sections 03 and 05 validation precedes the specified section 04 semantic order and every allocation or extension.
 - **LINK-FRG-037**: The first accepted fragment fixes context identity, Packet Length, creation, expiry, and CRC when present; offset zero may arrive later.
 - **LINK-FRG-038**: Fragments may arrive in arbitrary order.
 - **LINK-FRG-039**: Exact duplicates allocate nothing, change nothing, count as no progress, and cause no delivery.

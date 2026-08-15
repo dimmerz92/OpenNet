@@ -53,13 +53,13 @@ The Network Specification builds on the contract defined here and MUST NOT requi
 The link service interface operates only on link-scoped identifiers. Two such identifiers appear in the primitives:
 
 - `link_id`: a host-local opaque handle referring to one of the node's links, as defined in section 6. It is not a link-layer address and does not cross a medium.
-- `dest_link_addr` and `src_link_addr`: link-layer addresses as defined in section 05. They are meaningful only within one link and are not network-layer identifiers.
+- `dest_link_addr` and `src_link_addr`: logical link-layer destinations and sources as defined in section 05. An explicit unicast value includes its incarnation; a source may be absent. These values are meaningful only within one link and epoch and are not network-layer identifiers.
 
 The Link layer MUST NOT resolve network-layer addresses to link-layer addresses (LINK-SVC-074), restating LINK-OVR-002 and LINK-OVR-004 in this context. The link service therefore accepts a link-scoped destination on `Send` and presents a link-scoped source on `Receive`; it cannot accept a network destination.
 
-The Network layer owns the mapping between network-layer addresses and link-scoped identity (LINK-SVC-075). Specifically, the Network layer maintains state mapping a network-layer next-hop to `(link_id, epoch, dest_link_addr)` for `Send`, and `(link_id, epoch, src_link_addr)` back to a network-layer peer for `Receive`. This state is populated by neighbour discovery (section 05) and by observation of link capability and lifecycle via the primitives defined in section 4. This requirement does not obligate the Network layer to expose a particular data structure; it states that the resolution responsibility lives above the link service, not inside it.
+The Network layer owns the mapping between network-layer addresses and link-scoped identity (LINK-SVC-075). Specifically, the Network layer maintains state mapping a network-layer next hop to `(link_id, epoch, dest_link_addr)` for `Send`, and a present `(link_id, epoch, src_link_addr)` back to a Network peer for `Receive`. An explicit unicast destination or source includes the section 05 incarnation. This state is populated by neighbour observation and by link capability and lifecycle primitives. This requirement does not obligate the Network layer to expose a particular data structure; resolution remains above the Link layer.
 
-The link service exposes the inputs the Network layer uses to maintain that mapping: each link's validated capability descriptor, its current epoch, its currently reported MTU and maximum packet size, and its current lifecycle state (LINK-SVC-066). Section 05 may add primitives that expose link-local neighbour observations, reachability, and expiry; the Network layer remains responsible for correlating those facts with network-layer identity and selecting a next hop (LINK-SVC-096). The link service does not perform link selection; section 6 defines the multi-link model.
+The link service exposes the inputs the Network layer uses to maintain that mapping: each link's validated capability descriptor, current epoch, reported MTU and maximum packet size, lifecycle state, and the unauthenticated neighbour-observation primitives defined in section 05 (LINK-SVC-066). The Network layer remains responsible for correlating those facts with Network identity and selecting a next hop (LINK-SVC-096). The link service does not perform link selection; section 6 defines the multi-link model.
 
 ## 3. Downward media contract
 
@@ -92,7 +92,7 @@ The `Send` primitive submits an opaque payload for transmission during an identi
 - `link_id`: a handle identifying one of the node's known links per section 6.
 - `epoch`: the availability epoch against which the Network layer resolved `dest_link_addr`.
 - `payload`: a contiguous opaque byte sequence.
-- `dest_link_addr`: a link-layer address as defined in section 05, or a broadcast address where the link reports broadcast support per section 02.
+- `dest_link_addr`: exactly one logical implicit, incarnation-qualified unicast, broadcast, or multicast destination as defined in section 05.
 
 **Logical outputs** (exactly one per invocation):
 
@@ -102,6 +102,7 @@ The `Send` primitive submits an opaque payload for transmission during an identi
 - `rejected-link-unavailable`: the `link_id` is recognised, but the identified link is not in the `Available` lifecycle state or a down-purpose quiesce has closed service admission.
 - `rejected-stale-epoch`: the link is `Available`, but the supplied `epoch` is not its current epoch.
 - `rejected-direction-unsupported`: the link is `Available`, but its validated descriptor reports a direction that does not support sending.
+- `rejected-stale-destination`: the destination is well formed but its observation, incarnation, membership, or native route is not current under section 05.
 - `rejected-queue-full`: the link cannot accept the payload because its bounded transmission resources are exhausted. This rejection is transient; the Network layer MAY retry the submission.
 
 **Constraints and ordering:**
@@ -113,8 +114,8 @@ The `Send` primitive submits an opaque payload for transmission during an identi
 - If `Send` is invoked on a recognised `link_id` whose lifecycle state is not `Available`, or is ordered after a down-purpose quiesce closed service admission, the output MUST be `rejected-link-unavailable` (LINK-SVC-080).
 - If the supplied `epoch` does not equal the current epoch of an `Available` link, the output MUST be `rejected-stale-epoch`, and the payload MUST NOT be queued or transmitted (LINK-SVC-101).
 - If the link is `Available` but its validated direction does not support sending, the output MUST be `rejected-direction-unsupported` (LINK-SVC-089).
-- Where more than one rejection condition applies, the service MUST select the first applicable result in this order: unrecognised `link_id` as `rejected-malformed`; recognised but non-`Available` lifecycle state or closed down admission; stale epoch; unsupported send direction; malformed payload representation or zero length; invalid destination; packet size exceeded; queue capacity exhausted (LINK-SVC-090).
-- The set of outputs is exactly the seven alternatives above (LINK-SVC-030).
+- Where more than one rejection condition applies, the service MUST select the first applicable result in this order: unrecognised `link_id` as `rejected-malformed`; recognised but non-`Available` lifecycle state or closed down admission; stale epoch; unsupported send direction; malformed payload representation or zero length; structurally malformed or descriptor-unsupported destination; well-formed stale destination; packet size exceeded; queue capacity exhausted (LINK-SVC-090).
+- The set of outputs is exactly the eight alternatives above (LINK-SVC-030).
 
 ### 4.3 Upward: Receive
 
@@ -127,12 +128,12 @@ The `Receive` primitive delivers a payload that arrived on an identified link fr
 - `link_id`: the link on which the payload arrived.
 - `epoch`: the current availability epoch of that link.
 - `payload`: the opaque byte sequence as received.
-- `src_link_addr`: the link-layer address of the sender as observed by the receiver, as defined in section 05.
+- `src_link_addr`: when the received Data frame carried a valid source, its incarnation-qualified unicast Link source as defined in section 05; otherwise absent.
 - `recv_meta`: per-receive metadata that the Network layer MAY consult. `recv_meta` MAY be empty and MAY carry shim-reported receive quality hints, such as a signal-strength indication or a receive timestamp. Quality hints are unauthenticated, medium-observable values. The normative contents of `recv_meta` are defined in section 06.
 
 **Constraints and ordering:**
 
-- Correlating `(link_id, src_link_addr)` to a network-layer peer is the responsibility of the Network layer using its own state per section 2.5; the link service MUST NOT be required to perform that correlation (LINK-SVC-079).
+- Correlating a present `(link_id, epoch, src_link_addr)` to a Network peer is the responsibility of the Network layer using its own state per section 2.5; the link service MUST NOT be required to perform that correlation (LINK-SVC-079). An absent source provides no return address or peer-correlation input.
 - `Receive` MUST be emitted only while the identified link is `Available`, and its `epoch` MUST equal the epoch of that availability episode (LINK-SVC-091). A reception admitted before the down cut-off MUST either be delivered before `Link-Down` or be discarded through the observable discard mechanism defined in section 06. A reception received before the first `Link-Up` or after the down cut-off MUST be discarded and MUST NOT be retained for a later epoch (LINK-SVC-092).
 - A payload MUST be passed up by `Receive` at most once per link-layer reception. If the capability descriptor reports duplicate suppression as absent and the link service does not perform duplicate suppression, a single medium reception MAY surface as multiple `Receive` invocations (LINK-SVC-035).
 - Duplicate suppression is defined normatively in section 07.
@@ -156,7 +157,7 @@ The `Link-Up` primitive indicates that a link has become available for use (LINK
 
 - A link is considered available only after `Link-Up` has been emitted and before any subsequent `Link-Down` for the same `link_id` (LINK-SVC-037).
 - The Network layer MAY begin issuing `Send` after either `Link-Up` or an authoritative `Available` baseline returned by `Link-Query` or `Enumerate-Links` for that `link_id` (LINK-SVC-038).
-- The descriptor, epoch, MTU, and maximum packet size carried by one `Link-Up` MUST form one internally coherent tuple observed at the event's logical emission point (LINK-SVC-093). A receive-only tuple carries `max_packet_size` equal to zero. A send-capable tuple with no currently valid destination either carries zero or is not made `Available`, as defined by sections 04 and 05.
+- The descriptor, epoch, MTU, and maximum packet size carried by one `Link-Up` MUST form one internally coherent tuple observed at the event's logical emission point (LINK-SVC-093). A receive-only tuple carries `max_packet_size` equal to zero. A send-capable tuple derives its stable conservative value from the validated capability envelope under sections 04 and 05; the absence of a currently usable destination does not by itself change that value or authorise a `Send`.
 - `Link-Up` MUST NOT be emitted for a `link_id` that is currently `Available` (LINK-SVC-049).
 - The `epoch` carried by `Link-Up` MUST differ from the epoch of every previous `Link-Up` for the same `link_id`; each `Link-Up` begins a distinct availability episode of the continuing binding (LINK-SVC-082). The epoch space is implementation-defined, but an implementation MUST retire the binding or otherwise fail safely before it would reuse an epoch for that `link_id` during the host run.
 - The Network layer MUST treat a changed `epoch` for a `link_id` as invalidating all state associated with the previous epoch, including `(link_id, epoch, dest_link_addr)` and `(link_id, epoch, src_link_addr)` mappings (LINK-SVC-082).
@@ -258,7 +259,7 @@ A shim MAY report that a medium is one-way in its capability descriptor: send-on
 
 ### 5.4 Lifecycle governor and reasons
 
-Each implementation MUST provide a lifecycle governor that maps ordered shim-reported state into lifecycle primitives (LINK-SVC-055). A shim may emit `down` after it has emitted `up`; it does not wait for acknowledgement that the governor emitted `Link-Up`. The governor MUST maintain the latest shim-reported state and MAY coalesce an `up, down` sequence only while no authoritative `Available` episode has been exposed, subject to LINK-MED-065 (LINK-SVC-100). Once availability has been exposed, every accepted `down` MUST produce `Link-Down`, and a later accepted `up` for a continuing temporary-loss binding MUST produce `Link-Up` with a new epoch (LINK-SVC-103). The governor MUST impose a bounded, implementation-defined maximum dwell time in `Unavailable-Pending-Up`; if exceeded, it MUST complete `Shim-Stop`, release all remaining per-link state, and transition the identifier to `Retired` (LINK-SVC-056). State retained while `Unavailable-Pending-Up` MUST remain bounded per LINK-SVC-072. On transition to `Retired`, all remaining per-link state, including open reassembly contexts and retransmission buffers referenced by LINK-SVC-041, MUST be released (LINK-SVC-085); sections 04 and 06 define the concrete bounds for that state.
+Each implementation MUST provide a lifecycle governor that maps ordered shim-reported state into lifecycle primitives (LINK-SVC-055). A shim may emit `down` after it has emitted `up`; it does not wait for acknowledgement that the governor emitted `Link-Up`. The governor MUST maintain the latest shim-reported state and MAY coalesce an `up, down` sequence only while no authoritative `Available` episode has been exposed, subject to LINK-MED-065 (LINK-SVC-100). Once availability has been exposed, every accepted `down` MUST produce `Link-Down`, and a later accepted `up` for a continuing temporary-loss binding MUST produce `Link-Up` with a new epoch (LINK-SVC-103). The governor MUST impose a bounded, implementation-defined maximum dwell time in `Unavailable-Pending-Up`; if exceeded, it MUST complete `Shim-Stop`, release all remaining per-link state, and transition the identifier to `Retired` (LINK-SVC-056). State retained while `Unavailable-Pending-Up` MUST remain bounded per LINK-SVC-072. On transition to `Retired`, all remaining per-link state, including open reassembly contexts, neighbour observations, native-route associations, and retransmission buffers referenced by LINK-SVC-041, MUST be released (LINK-SVC-085); sections 04 through 06 define the concrete bounds for that state.
 
 Every quiesce barrier MUST have a finite implementation-defined or adapter-profile-defined deadline (LINK-SVC-104). Failure is reported by `Shim-Quiesce.failed-timeout` or the non-coalescible shim-originated `barrier-failed` indication. The lifecycle governor MUST close service admission, MUST NOT publish a pending reduced tuple, MUST emit `Link-Down` with a barrier-failure reason if availability was exposed, and MUST complete or force `Shim-Stop` and retire the binding. No uncommitted work from the failed barrier may enter another episode. Work already beyond the adapter profile's commit boundary remains subject to that boundary. The failure MUST be observable through the lifecycle reason or implementation diagnostic channel (LINK-SVC-104).
 
@@ -297,11 +298,11 @@ Which media become links is a link-layer concern below the service boundary; whi
 
 ## 7. Limits and input validation
 
-The link service detects and rejects malformed input at every primitive boundary. Sections 03 and 04 define additional frame-level validation.
+The link service detects and rejects malformed input at every primitive boundary. Sections 03 through 05 define additional frame-level validation.
 
-Input to `Send` that cannot be accepted (zero-length payloads, payloads that are not contiguous byte sequences, payloads exceeding the reported maximum packet size, an unrecognised `link_id`, a recognised `link_id` whose link is not `Available`, a stale epoch, an unsupported send direction, or a destination invalid for the descriptor) MUST be rejected under the precedence defined by LINK-SVC-090, without transmission and without side effects on any other link or flow (LINK-SVC-068), restating LINK-OVR-014 for the upward boundary.
+Input to `Send` that cannot be accepted, including malformed payloads, an unrecognised or unavailable link, a stale epoch, an unsupported direction, a malformed or unsupported destination, a stale destination, an oversized packet, or exhausted queue capacity, MUST be rejected under the precedence defined by LINK-SVC-090, without transmission and without side effects on any other link or flow (LINK-SVC-068), restating LINK-OVR-014 for the upward boundary.
 
-A `Receive` invocation carrying a payload that fails the link-layer frame validations defined in sections 03 and 04 MUST be discarded and MUST NOT cause the link to become unavailable (LINK-SVC-069). A single malformed reception MUST NOT corrupt state belonging to other receptions or other links (LINK-SVC-070). Discard of valid frames under resource pressure, where permitted, is governed by LINK-SVC-081.
+A `Receive` invocation carrying a payload that fails the link-layer frame validations defined in sections 03 through 05 MUST be discarded and MUST NOT cause the link to become unavailable (LINK-SVC-069). A single malformed reception MUST NOT corrupt state belonging to other receptions or other links (LINK-SVC-070). Discard of valid frames under resource pressure, where permitted, is governed by LINK-SVC-081.
 
 The number of links a node may host simultaneously is implementation-defined; an implementation MAY impose a finite upper bound (LINK-SVC-071). All link-layer state for each link MUST be resource-bounded and MUST remain correct under adversarial input (LINK-SVC-072), restating LINK-OVR-024 for this section.
 
@@ -368,11 +369,11 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-SVC-027** (restatement of LINK-OVR-028): Where a safety-relevant capability is absent or invalid, the implementation MUST fail closed and behave as if the capability were absent.
 - **LINK-SVC-028**: Every compliant link MUST support all primitives in section 4. Each primitive is defined normatively by its logical inputs, logical outputs, and the constraints and ordering rules that govern its invocation, not by any particular syntactic function shape.
 - **LINK-SVC-029**: The `Send` primitive submits an opaque payload for transmission on an identified link and availability epoch to an identified link-layer destination.
-- **LINK-SVC-030**: The set of `Send` logical outputs is exactly the seven alternatives: `accepted`, `rejected-packet-size-exceeded`, `rejected-malformed`, `rejected-link-unavailable`, `rejected-stale-epoch`, `rejected-direction-unsupported`, and `rejected-queue-full`.
+- **LINK-SVC-030**: The set of `Send` outputs is exactly `accepted`, `rejected-packet-size-exceeded`, `rejected-malformed`, `rejected-link-unavailable`, `rejected-stale-epoch`, `rejected-direction-unsupported`, `rejected-stale-destination`, and `rejected-queue-full`.
 - **LINK-SVC-031**: `Send` MUST NOT block waiting for medium availability beyond a finite, implementation-defined maximum wait interval.
 - **LINK-SVC-032**: Whether a link-layer broadcast destination is permitted on a given link is governed by the capability descriptor.
 - **LINK-SVC-033**: `Send` is asynchronous with respect to medium transmission; `accepted` indicates acceptance for transmission, not delivery.
-- **LINK-SVC-034**: The `Receive` primitive delivers a payload that arrived on an identified link from an identified link-layer source. Its logical outputs are `link_id`, `epoch`, `payload`, `src_link_addr`, and `recv_meta`; `recv_meta` MAY be empty and MAY carry shim-reported receive quality hints; its normative contents are defined in section 06.
+- **LINK-SVC-034**: `Receive` delivers a payload with link, epoch, optional incarnation-qualified source, and section 06-owned receive metadata; anonymous source is absent.
 - **LINK-SVC-035**: A payload MUST be passed up by `Receive` at most once per link-layer reception; if the capability descriptor reports duplicate suppression as absent and the link service performs no suppression, a single medium reception MAY surface as multiple `Receive` invocations, subject to the duplicate suppression rules in section 07.
 - **LINK-SVC-036**: The `Link-Up` primitive indicates a link has become available. Its logical outputs are `link_id`, `descriptor`, `epoch`, `mtu`, and `max_packet_size`.
 - **LINK-SVC-037**: A link is available only after `Link-Up` and before any subsequent `Link-Down` for the same `link_id`.
@@ -404,31 +405,31 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-SVC-063**: `Send` on a specific `link_id` MUST be transmitted on the identified link only.
 - **LINK-SVC-064**: The link service MUST NOT silently forward a payload submitted to one link onto another link.
 - **LINK-SVC-065**: Selecting which link to send on is the responsibility of the Network layer; the link service does not perform link selection.
-- **LINK-SVC-066**: The link service MUST expose each link's validated capability descriptor, current epoch, reported current MTU and maximum packet size, and current lifecycle state, via the lifecycle primitives and `Link-Query`.
+- **LINK-SVC-066**: The service exposes descriptor, epoch, MTU, maximum packet size, lifecycle state, and section 05 neighbour observations through their owning primitives.
 - **LINK-SVC-067**: Beyond `Link-Query`, section 6.3 adds no further foundational selection primitive; `Enumerate-Links` is defined in section 02.6 and mechanism-specific primitives may be added under LINK-SVC-096.
 - **LINK-SVC-068**: `Send` input that cannot be accepted MUST be rejected under LINK-SVC-090 without transmission and without side effects on other links or flows.
-- **LINK-SVC-069**: A `Receive` carrying a payload that fails frame validations MUST be discarded and MUST NOT cause the link to become unavailable.
+- **LINK-SVC-069**: A `Receive` carrying a payload that fails sections 03 through 05 frame validation is discarded and does not make the link unavailable.
 - **LINK-SVC-070**: A single malformed reception MUST NOT corrupt state belonging to other receptions or other links.
 - **LINK-SVC-071**: The number of links a node may host simultaneously is implementation-defined; an implementation MAY impose a finite upper bound.
 - **LINK-SVC-072** (restatement of LINK-OVR-024): All link-layer state for each link MUST be resource-bounded and MUST remain correct under adversarial input.
 - **LINK-SVC-073** (restatement of LINK-OVR-029 in primitive terms): Every compliant link MUST support at least the guaranteed minimum MTU and MUST NOT exceed the global maximum frame size.
 - **LINK-SVC-074** (restatement of LINK-OVR-002 and LINK-OVR-004): The Link layer MUST NOT resolve network-layer addresses to link-layer addresses. The link service accepts a link-scoped destination on `Send` and presents a link-scoped source on `Receive`; it cannot accept a network destination.
-- **LINK-SVC-075**: The Network layer owns mappings between network-layer addresses and `(link_id, epoch, link_addr)` identity, populated by neighbour discovery and lifecycle observation; resolution remains above the link service.
+- **LINK-SVC-075**: The Network layer owns mappings between Network addresses and incarnation-qualified `(link_id, epoch, link_addr)` values populated by neighbour observation and lifecycle state; resolution remains above Link.
 - **LINK-SVC-076**: An implementation conforms to a primitive by exposing an operation that accepts values corresponding to the named logical inputs, produces values corresponding to the named logical outputs, and obeys every stated constraint and ordering rule, regardless of how that operation is expressed in the implementation's language or runtime.
 - **LINK-SVC-077**: A primitive MAY be realised as a function call returning a value, as a callback or continuation, as a message on a channel or queue, as an actor message, as an event subscription, or by any other mechanism that carries the named inputs and outputs and respects the stated ordering. No representation is mandated or privileged.
 - **LINK-SVC-078**: Where a primitive lists an output as one of several alternatives, an implementation MUST surface exactly one of the listed alternatives per invocation and MUST NOT silently coalesce alternatives or omit a required output.
-- **LINK-SVC-079**: Correlating `(link_id, src_link_addr)` to a network-layer peer on `Receive` is the responsibility of the Network layer using its own state; the link service MUST NOT be required to perform that correlation.
+- **LINK-SVC-079**: Correlating a present `(link_id, epoch, src_link_addr)` to a Network peer is Network-owned; an absent source supplies no correlation or return input.
 - **LINK-SVC-080**: `Send` on a recognised non-`Available` link or after down-purpose quiesce closed admission MUST return `rejected-link-unavailable`.
 - **LINK-SVC-081**: Under resource pressure, an implementation MAY discard a valid received frame instead of emitting `Receive` for it; every such discard MUST be observable to the Network layer. The normative form of the discard signal is defined in section 06.
 - **LINK-SVC-082**: Every `Link-Up` for a `link_id` carries a previously unused epoch for that host run and identifies a distinct availability episode; Network invalidates prior-epoch state, and the implementation retires or fails safely before epoch reuse. A different binding receives a new `link_id`.
 - **LINK-SVC-083**: An asymmetric link supports both `Send` and `Receive`; each descriptor field has a normative directional scope, and the service constraints apply in their respective directions.
 - **LINK-SVC-084**: The link service MUST provide a side-effect-free `Link-Query` primitive returning an internally coherent lifecycle state, validated descriptor, epoch, MTU, and maximum packet size tuple for a recognised `link_id`, or `unknown-link` for an unrecognised one.
-- **LINK-SVC-085**: On transition to `Retired`, all remaining per-link state, including reassembly contexts and retransmission buffers, MUST be released; state retained while `Unavailable-Pending-Up` MUST remain bounded per LINK-SVC-072.
+- **LINK-SVC-085**: Retirement releases all per-link reassembly, neighbour, native-route, retransmission, and other state; pending-up state remains bounded.
 - **LINK-SVC-086**: Descriptor and size values reported for a `link_id` are current only while that link is `Available`.
 - **LINK-SVC-087**: At the down cut-off, uncommitted work MUST be cancelled or returned to service control and MUST NOT begin transmission afterwards; a frame irreversibly committed before the cut-off MAY complete under the adapter profile. The Network layer MUST treat every accepted `Send` without a defined successful completion outcome as potentially lost once `Link-Down` is emitted.
 - **LINK-SVC-088**: Upward primitives for the same `link_id` MUST be delivered to the Network layer in the order they were emitted; upward primitives for different `link_id`s MAY be delivered in any relative order.
 - **LINK-SVC-089**: If an `Available` link's validated direction does not support sending, `Send` MUST return `rejected-direction-unsupported`.
-- **LINK-SVC-090**: Overlapping `Send` rejection conditions MUST be resolved in this order: unrecognised identifier, non-`Available` lifecycle or closed down admission, stale epoch, unsupported direction, malformed or zero-length payload, invalid destination, packet size, then queue capacity.
+- **LINK-SVC-090**: Overlapping `Send` rejection conditions are ordered: unrecognised identifier, unavailable lifecycle or closed admission, stale epoch, unsupported direction, malformed or zero-length payload, malformed or unsupported destination, stale destination, packet size, then queue capacity.
 - **LINK-SVC-091**: `Receive` MUST be emitted only while the link is `Available` and MUST carry the epoch of that availability episode.
 - **LINK-SVC-092**: A reception admitted before the down cut-off MUST be delivered before `Link-Down` or discarded observably; pre-up and post-cut-off receptions MUST be discarded and MUST NOT cross into a later epoch.
 - **LINK-SVC-093**: The descriptor, epoch where applicable, MTU, and maximum packet size carried by one lifecycle event MUST form one internally coherent tuple at its logical emission point, including a zero no-send sentinel for receive-only links and the section 04/05 empty-destination case.

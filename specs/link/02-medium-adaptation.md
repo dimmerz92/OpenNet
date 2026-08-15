@@ -70,13 +70,15 @@ The `Shim-Send` operation hands a generic frame, as defined in section 03, to th
 
 - `link_id`: the handle of the link.
 - `frame`: a generic frame per section 03, carrying a complete Network payload or one payload fragment and link-layer addressing per sections 04 and 05.
+- `native_route`: the opaque bounded section 05 route token selected for this frame, or absent only where the adapter profile defines an implicit route.
+- `source_claim_generation`: an opaque bounded section 05 local-claim generation token for a source-bearing frame, or absent for a source-less frame.
 
 **Logical outputs** (exactly one per invocation):
 
 - `accepted`: the frame was accepted for transmission. Acceptance indicates the shim has taken responsibility for attempting transmission, not that the frame has been or will be delivered.
 - `rejected-queue-full`: the shim's bounded transmission resources are exhausted. This rejection is transient.
 - `rejected-link-unavailable`: the shim cannot transmit (for example, the medium is down, or the shim cannot transmit for a reason reported through the descriptor; see section 4.4). Direction-specific send rejection is handled at the service boundary per section 4.4 and LINK-SVC-054, not by the shim.
-- `rejected-malformed`: the complete generic frame exceeds the current send-direction bound or intrinsically violates the applicable adapter profile's admission rules. Full generic-frame structural and semantic validation belongs to the link service. Transient exhaustion of bounded shim capacity is `rejected-queue-full`, not `rejected-malformed`.
+- `rejected-malformed`: the complete generic frame exceeds the current send-direction bound, the native route is stale, malformed, oversized, or belongs to another binding or epoch, or the frame-route pair intrinsically violates the applicable adapter profile's admission rules. Full generic-frame structural and semantic validation belongs to the link service. Transient exhaustion of bounded shim capacity is `rejected-queue-full`, not `rejected-malformed`.
 - `unknown-binding`: no live binding exists for `link_id`.
 
 **Constraints and ordering:**
@@ -84,7 +86,8 @@ The `Shim-Send` operation hands a generic frame, as defined in section 03, to th
 - `Shim-Send` is asynchronous with respect to medium transmission, restating LINK-SVC-033 at the shim boundary.
 - The shim MUST reject `Shim-Send` as `rejected-link-unavailable` while the binding is not up or while a quiesce barrier is in progress. It MUST return `unknown-binding` for an unknown or retired identifier (LINK-MED-080).
 - The shim MUST translate the generic frame to the medium's native framing on send, restating LINK-OVR-022 (LINK-MED-008). The translation MUST preserve the opaque payload byte sequence exactly; the shim MUST NOT inspect, parse, or act on payload contents (LINK-MED-009), restating LINK-OVR-002 for the shim.
-- The link service MUST complete section 03 structural and semantic validation before invoking `Shim-Send`. The shim independently validates only complete-unit admission, the current directional size bound, its adapter-profile rules, and native resource safety; it is not required to parse generic-frame TLVs, Control Types, or body semantics (LINK-MED-107).
+- The shim MUST select the native transmission route only from `native_route` or the adapter profile's implicit-route rule. It is not required to parse Link-address TLVs to select a native destination.
+- The link service MUST complete sections 03 through 05 structural and semantic validation before invoking `Shim-Send`. The shim independently validates only complete-unit admission, the current directional size bound, native-route validity, its adapter-profile rules, and native resource safety; it is not required to parse generic-frame TLVs, Control Types, or body semantics (LINK-MED-107).
 - For a stream-oriented medium, the shim MUST perform stream-to-datagram adaptation as defined in section 3 before transmission (LINK-MED-010).
 
 ### 2.5 Downward: Shim-Quiesce
@@ -98,7 +101,7 @@ The `Shim-Quiesce` operation establishes a binding-scoped ownership cut-off befo
 
 **Logical outputs** (exactly one per invocation):
 
-- `quiesced`: no frame that remained uncommitted at the cut-off can begin native transmission. For `size-change`, this result is accompanied by `returned_frames`, containing every uncommitted generic frame removed from shim ownership, and every frame committed before the cut-off has completed native transmission. For `down`, uncommitted frames are cancelled, `returned_frames` is empty, and every reception admitted before the receive cut-off has been emitted as `Shim-Receive` or discarded under the observable-discard rules.
+- `quiesced`: no frame that remained uncommitted at the cut-off can begin native transmission. For `size-change`, this result is accompanied by `returned_frames`, containing every uncommitted generic frame and its associated native route removed from shim ownership, and every frame committed before the cut-off has completed native transmission. For `down`, uncommitted frame-route pairs are cancelled, `returned_frames` is empty, and every reception admitted before the receive cut-off has been emitted as `Shim-Receive` or discarded under the observable-discard rules.
 - `failed-timeout`: the barrier failed or exceeded its finite deadline. Shim admission remains closed and the binding must be forced down and retired under LINK-SVC-104.
 - `unknown-binding`: no live binding exists for `link_id`.
 - `rejected-invalid-state`: no barrier is applicable in the binding's current state.
@@ -107,7 +110,7 @@ The `Shim-Quiesce` operation establishes a binding-scoped ownership cut-off befo
 
 - Once `Shim-Quiesce` begins, the shim MUST reject new `Shim-Send` operations for the binding. After a successful `size-change` barrier, sending MAY resume under the new coherent tuple after `Link-Changed`. After a successful `down` barrier, the binding remains quiescing until `Shim-Stop`; it cannot resume and no new `Shim-Send` is permitted (LINK-MED-082).
 - For `down`, a frame irreversibly committed to native transmission before the cut-off MAY complete after the barrier. For `size-change`, every pre-cut-off committed frame MUST complete before `quiesced` is returned. The applicable adapter profile MUST define the commit boundary precisely enough to distinguish committed from cancellable work (LINK-MED-083).
-- A `quiesced` result MUST NOT be returned until every uncommitted frame has been cancelled for `down` or returned exactly once in `returned_frames` for `size-change`. `returned_frames` preserves every occurrence and its exact bytes and MUST NOT coalesce byte-identical frames; its ordering is unspecified. The shim MUST NOT retain cancelled or returned work and MUST NOT carry it into a later availability epoch (LINK-MED-084).
+- A `quiesced` result MUST NOT be returned until every uncommitted frame-route occurrence has been cancelled for `down` or returned exactly once in `returned_frames` for `size-change`. The bounded `returned_frames` collection is present even when empty; every item contains exactly `frame`, `native_route`, and `source_claim_generation`, with either token absent only where permitted by its contract. It preserves every occurrence and exact frame bytes, MUST NOT coalesce byte-identical frames, and has no semantically significant ordering. Ownership transfers exactly once. The shim MUST NOT retain cancelled or returned work and MUST NOT carry it into a later availability epoch (LINK-MED-084).
 - For a `down` barrier, the shim MUST establish a receive cut-off. It MUST emit every admitted pre-cut-off `Shim-Receive` before the barrier completes or discard it under the section 06 observability mechanism. It MUST drain, cancel, or irrevocably fence every incomplete stream prefix, native subdivision or aggregation context, delayed native callback, byte, native unit, and metadata item belonging to the ending episode. No old-side input may contribute to a later `Shim-Receive`; later receptions are discarded and never retained for a later episode (LINK-MED-098).
 - Every barrier MUST have a finite implementation-defined or adapter-profile-defined deadline (LINK-MED-100). If it cannot complete within that deadline, the shim MUST return `failed-timeout`, keep send and receive admission closed, and discard or irrevocably fence every uncommitted send, receive context, native callback, and metadata item. A failed size change MUST NOT emit or authorise the reduced descriptor. The service then applies LINK-SVC-104 (LINK-MED-100).
 
@@ -119,14 +122,16 @@ The shim emits a `Shim-Receive` indication when one or more generic frames have 
 
 - `link_id`: the handle of the link on which the reception occurred.
 - `frame`: a generic frame per section 03, reconstructed from the medium's native reception.
+- `native_route`: the opaque bounded section 05 route token observed for the native origin, or absent where the medium or adapter profile provides none.
 - `recv_meta`: shim-reported receive quality hints; MAY be empty. The normative contents of `recv_meta` at the service boundary are defined in section 06.
 
 **Constraints and ordering:**
 
 - The shim MUST reconstruct a generic frame from the medium's native framing on receive, restating LINK-OVR-022 (LINK-MED-012). The reconstruction MUST preserve the opaque payload byte sequence as received; the shim MUST NOT inspect, parse, or act on payload contents (LINK-MED-009).
+- A present native route MUST satisfy the adapter profile's finite representation, binding, epoch, and validation rules before `Shim-Receive` emits it. The shim does not derive Link identity from the token.
 - A single medium reception MAY yield zero, one, or several `Shim-Receive` indications, depending on how the native reception maps to generic frames (LINK-MED-060). For a stream-oriented medium, section 3 governs reconstruction.
 - The shim MUST NOT emit a `Shim-Receive` whose frame exceeds the operative receive-capacity bound defined in section 4.4. The link service MUST independently check that bound before parsing the frame. Either boundary MUST discard an oversized reception in isolation as `receive-frame-size-exceeded` under sections 03 and 06 (LINK-MED-106).
-- A `Shim-Receive` indication carrying a frame that fails the validations of section 03 MUST be discarded by the link service; the discard MUST NOT affect other receptions or links (LINK-MED-061), restating LINK-SVC-069 and LINK-SVC-070.
+- A `Shim-Receive` indication carrying a frame that fails sections 03 through 05 validation MUST be discarded by the link service; the discard MUST NOT affect other receptions or links (LINK-MED-061), restating LINK-SVC-069 and LINK-SVC-070.
 - The link service MUST admit a valid `Shim-Receive` to `Receive` only during the current `Available` episode. It MUST apply the pre-up, down-cut-off, observable-discard, and epoch rules of LINK-SVC-091 and LINK-SVC-092 (LINK-MED-094).
 
 ### 2.7 Upward: Shim-State-Changed indication
@@ -174,11 +179,45 @@ The `Shim-Describe` operation returns the shim's current capability descriptor (
 
 Note: `Shim-Describe` is expected to be inexpensive and to return without blocking on medium I/O; the link service may invoke it on latency-sensitive paths.
 
-### 2.9 Binding operation states
+### 2.9 Downward: Shim-Route-Cutoff
+
+`Shim-Route-Cutoff` establishes the destination-scoped ownership cut-off required by section 05 without quiescing unrelated native routes (LINK-MED-109).
+
+**Logical inputs:**
+
+- `link_id`: the handle of the binding.
+- `native_route`: the exact current route token being invalidated.
+
+**Logical outputs** (exactly one per invocation):
+
+- `cut-off`: accompanied by the bounded `returned_frames` collection defined by `Shim-Quiesce`, present even when empty and containing every uncommitted occurrence associated with that token exactly once; no later frame may commit through the invalidated token.
+- `failed-timeout`: the finite cut-off deadline expired. Admission through the token remains closed and the service abandons affected uncommitted work.
+- `rejected-stale-route`: the token is already invalid or no longer current for the binding and epoch.
+- `unknown-binding`: no live binding exists for `link_id`.
+- `rejected-invalid-state`: the binding is not `bound-up` or a binding-wide quiesce already controls it.
+
+The Link service closes admission for the affected logical destination before invoking this operation. The shim MUST reject later `Shim-Send` use of the token as `rejected-malformed`, while unrelated current routes remain usable. A frame committed before the cut-off MAY complete under the adapter profile. The shim retains only the bounded state needed for such committed completion and releases it afterwards. On `cut-off`, it owns no uncommitted occurrence associated with the token. Returned occurrences MUST NOT be coalesced, including byte-identical frames. The operation and its failure path have finite adapter-profile-defined deadlines and work bounds. Failure does not reopen the route or make unrelated destinations unavailable.
+
+### 2.10 Downward: Shim-Claim-Cutoff
+
+`Shim-Claim-Cutoff` establishes a source-claim-scoped ownership cut-off without quiescing unrelated routes, source-claim generations, or source-less work (LINK-MED-110).
+
+**Logical inputs:**
+
+- `link_id`: the handle of the binding.
+- `source_claim_generation`: the exact current opaque generation token being retired.
+
+**Logical outputs** are `cut-off`, `failed-timeout`, `rejected-stale-claim`, `unknown-binding`, or `rejected-invalid-state`, with the same meanings and bounded `returned_frames` transfer contract as `Shim-Route-Cutoff`, selected by source-claim generation rather than native route. A frame committed before the cut-off MAY complete. After the cut-off begins, no later frame may commit under that generation. Failure keeps the generation closed and leaves unrelated work usable.
+
+### 2.11 Upward: Shim-Route-Invalidated
+
+`Shim-Route-Invalidated` reports adapter-originated invalidation of one exact current native route (LINK-MED-111). Before emitting it, the shim MUST close admission through that token, permit only already committed completion, and remove every uncommitted occurrence from shim ownership. The indication carries `link_id`, the current epoch, `native_route`, and the bounded `returned_frames` collection defined by `Shim-Quiesce`. It is ordered with `Shim-Send`, both selective cut-offs, binding-wide barriers, receive indications, and lifecycle indications for the binding. The service then invalidates the associated internal observation or route, applies destination abandonment exactly once, and emits the section 05 aggregate transition. A profile unable to isolate one route MUST use the binding-wide down path instead.
+
+### 2.12 Binding operation states
 
 For operation validation, a shim binding is logically in one of `bound-down`, `bound-up`, `quiescing`, or `retired` (LINK-MED-096). `started` creates `bound-down`; an emitted `up` enters `bound-up`; a shim-originated temporary-loss `down` enters `bound-down`; `Shim-Quiesce` enters `quiescing`; a successful size change returns to `bound-up` after `Link-Changed`, while a down-purpose barrier remains `quiescing` until `Shim-Stop`; and `Shim-Stop` enters terminal `retired`.
 
-`Shim-Send` is valid only in `bound-up` outside a quiesce barrier. `Shim-Quiesce` is valid for a live binding when its purpose can establish a new cut-off. `Shim-Stop` is valid in `bound-down` or after a down-purpose barrier in `quiescing`. `Shim-Describe` is valid for any live binding. Calls outside these states MUST return the safe rejection defined by that operation, without changing binding, medium, or other-link state (LINK-MED-097). The implementation MAY retain a bounded identifier tombstone or use allocator state to distinguish a retired identifier; in either case, it MUST prevent a retired identifier from creating another binding during the host run.
+`Shim-Send` is valid only in `bound-up` outside a quiesce barrier and for a current native route and source-claim generation where present. `Shim-Route-Cutoff` and `Shim-Claim-Cutoff` are valid in `bound-up` for their respective current token and do not change the binding state. `Shim-Quiesce` is valid for a live binding when its purpose can establish a new cut-off. `Shim-Stop` is valid in `bound-down` or after a down-purpose barrier in `quiescing`. `Shim-Describe` is valid for any live binding. Calls outside these states MUST return the safe rejection defined by that operation, without changing binding, medium, or other-link state (LINK-MED-097). The implementation MAY retain a bounded identifier tombstone or use allocator state to distinguish a retired identifier; in either case, it MUST prevent a retired identifier from creating another binding during the host run.
 
 ## 3. Adapter profiles and stream-to-datagram adaptation
 
@@ -211,6 +250,7 @@ Each named core field has at most one logical occurrence. A descriptor represent
 - `maximum_frame_size` (integer; required): the maximum generic frame size, in bytes, the shim can present in the send direction. For a send-capable direction, this is the value reported as the link's MTU upward (LINK-SVC-007). Section 04 derives maximum packet size using the framing capacity defined in section 03 and its fragmentation and reassembly bounds. For a `receive-only` link, `maximum_frame_size` instead has the receive-direction meaning defined in section 4.4 and `Send` is rejected per LINK-SVC-054.
 - `receive_max_frame_size` (integer; optional, defaults to `maximum_frame_size` when absent): for a `bidirectional` or `asymmetric` link, the normative maximum generic frame size the shim and link service accept in the receive direction. The Network layer MAY consult it as information but MUST NOT be required to enforce it. It is ignored for `send-only` and interpreted specially for `receive-only` links as defined in section 4.4.
 - `one_way_direction` (enumeration, required): one of `bidirectional`, `send-only`, `receive-only`, or `asymmetric`, governing the send and receive availability rules of section 01.5.3 (LINK-SVC-052, LINK-SVC-083).
+- `neighbour_mode` (enumeration, required): exactly one of `none`, `implicit-peer`, `externally-supplied`, or `active-advertisement`, governing proactive unicast-destination acquisition under section 05.
 - `reliable_delivery` (boolean; optional, absent denotes false): in the send direction, the medium provides the reliable-delivery semantic defined in section 06 for accepted `Send` operations.
 - `ordered_delivery` (boolean; optional, absent denotes false): in the send direction, the medium preserves the ordering semantic defined in section 07 for accepted `Send` operations.
 - `duplicate_suppression` (boolean; optional, absent denotes false): in the receive direction, the shim or medium provides the duplicate-suppression semantic defined in section 07 for frames eligible to become `Receive`.
@@ -253,7 +293,7 @@ Where a safety-relevant capability is absent or invalid, the implementation MUST
 
 `receive_max_frame_size`, when present, MUST satisfy the same bounds as `maximum_frame_size` (LINK-MED-033), except on `send-only` links, where the field is ignored per LINK-MED-028. When absent, it defaults to `maximum_frame_size`. After defaulting, it is the operative receive-capacity bound for `bidirectional` and `asymmetric` links and is enforced under LINK-MED-106.
 
-`one_way_direction` MUST be present and be one of the four values listed in section 4.2; it has no default (LINK-MED-034). An absent or unrecognised `one_way_direction` is invalid.
+`one_way_direction` MUST be present and be one of the four values listed in section 4.2; it has no default (LINK-MED-034). `neighbour_mode` MUST also be present and be one of the four values listed there; it has no default. An absent or unrecognised value in either required enumeration is invalid.
 
 For each boolean core field, an absent value denotes `false` (LINK-MED-035). A present value that is not a boolean MUST be normalised to `false` before descriptor validity is decided, so that no unsupported capability is advertised.
 
@@ -268,6 +308,7 @@ The following cross-field rules are applied during optional-field normalisation:
 - `broadcast_support` on a `receive-only` link MUST be normalised to `false`, because it is a send-direction capability (LINK-MED-037).
 - `multicast_support` on a `receive-only` link MUST be normalised to `false` for the same reason (LINK-MED-038).
 - `full_duplex` together with `one_way_direction` of `send-only` or `receive-only` MUST be normalised to `false` (LINK-MED-039).
+- A `receive-only` link MUST use `neighbour_mode` of `none`. A `send-only` link MUST NOT use `active-advertisement`. `active-advertisement` requires `one_way_direction` of `bidirectional` or `asymmetric` and normalised `broadcast_support` of `true`. A violation is an invalid required-field combination and cannot be normalised into validity.
 - No further cross-field rule is defined in v1. An implementation MAY apply additional host-local diagnostics but MUST NOT reject or alter a descriptor solely on the basis of a rule not stated here (LINK-MED-040).
 
 ### 5.4 Invalid descriptor handling
@@ -276,7 +317,7 @@ A descriptor with a structural error, an unknown top-level component, or an abse
 
 A descriptor reported by `Shim-State-Changed` with `kind` of `changed`, or returned by `Shim-Describe`, is processed through the same ordered normalisation and validation pipeline after a link is `Available` (LINK-MED-043). A hard failure affecting a required field or structure MUST be followed by the down barrier and `Link-Down` with `descriptor-invalid`.
 
-An invalid required core field (`maximum_frame_size`, `one_way_direction`) in a post-`Available` descriptor cannot fail closed to a default and MUST be treated as affecting availability (LINK-MED-072). An invalid optional boolean is normalised to `false`, an invalid class token to `unknown`, an invalid `receive_max_frame_size` to its absent-derived default, and an optional-field consistency failure to the safe default of the offending optional capability (LINK-MED-073). The authoritative copy stores only the normalised descriptor. `Link-Changed` is emitted only when that normalised descriptor or its derived service values differ from the current coherent tuple (LINK-MED-073).
+An invalid required core field (`maximum_frame_size`, `one_way_direction`, or `neighbour_mode`) or required-field combination in a post-`Available` descriptor cannot fail closed to a default and MUST be treated as affecting availability (LINK-MED-072). An invalid optional boolean is normalised to `false`, an invalid class token to `unknown`, an invalid `receive_max_frame_size` to its absent-derived default, and an optional-field consistency failure to the safe default of the offending optional capability (LINK-MED-073). The authoritative copy stores only the normalised descriptor. `Link-Changed` is emitted only when that normalised descriptor or its derived service values differ from the current coherent tuple (LINK-MED-073).
 
 ### 5.5 Indication provenance
 
@@ -330,7 +371,7 @@ Conformance to media-specific behaviour that is reported as absent in the valida
 
 A descriptor that exceeds an implementation's host-local bound on preserved extension fields is handled per LINK-MED-027; the descriptor is not failed. A descriptor that fails field validation or consistency is handled per section 5.4.
 
-The link service MAY bound the number of shims it hosts simultaneously; the bound is implementation-defined (restating LINK-SVC-071). All per-link state owned by the link service or shim, including the authoritative descriptor copy, stream-parser state, native-unit subdivision state, and queued transmission state, is resource-bounded and MUST remain correct under adversarial input (LINK-MED-054), restating LINK-OVR-024 for this section. Adapter profiles supply the concrete bounds required by LINK-MED-087 and LINK-MED-089.
+The link service MAY bound the number of shims it hosts simultaneously; the bound is implementation-defined (restating LINK-SVC-071). All per-link state owned by the link service or shim, including the authoritative descriptor copy, stream-parser state, native-unit subdivision state, native-route tokens and mappings, and queued transmission state, is resource-bounded and MUST remain correct under adversarial input (LINK-MED-054), restating LINK-OVR-024 for this section. Adapter profiles supply the concrete bounds required by LINK-MED-087, LINK-MED-089, and section 05.
 
 A `Shim-Send` returning `rejected-malformed` for a frame that violates its directional size or intrinsic adapter-profile admission rules MUST NOT affect any other frame, flow, or link (restating LINK-OVR-014). Transient exhaustion of bounded shim capacity returns `rejected-queue-full`. An invalid or oversized reception is discarded per LINK-MED-061 and LINK-MED-106 and MUST NOT cause the link to become unavailable (restating LINK-OVR-014).
 
@@ -401,11 +442,11 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-004**: A compliant shim MUST implement every operation in section 2.
 - **LINK-MED-005**: `Shim-Start` requests that the shim bring its medium binding into use and begin observing medium state; its outputs are `started`, `rejected-resource`, `rejected-invalid`, and `rejected-invalid-state`.
 - **LINK-MED-006**: `Shim-Stop` permanently retires a binding and releases its resources; its outputs are `stopped`, `unknown-binding`, and `rejected-invalid-state`.
-- **LINK-MED-007**: `Shim-Send` hands a generic frame to the shim for transmission; its outputs are `accepted`, `rejected-queue-full`, `rejected-link-unavailable`, `rejected-malformed`, and `unknown-binding`.
+- **LINK-MED-007**: `Shim-Send` hands a generic frame and native route to the shim; its outputs are `accepted`, `rejected-queue-full`, `rejected-link-unavailable`, `rejected-malformed`, and `unknown-binding`.
 - **LINK-MED-008** (restatement of LINK-OVR-022): The shim MUST translate the generic frame to the medium's native framing on send.
 - **LINK-MED-009** (restatement of LINK-OVR-002): The shim MUST NOT inspect, parse, or act on payload contents; the opaque payload byte sequence MUST be preserved exactly on send and receive.
 - **LINK-MED-010**: For a stream-oriented medium, the shim MUST perform stream-to-datagram adaptation per section 3 before transmission.
-- **LINK-MED-011**: The `Shim-Receive` indication delivers a generic frame reconstructed from a medium reception, with optional `recv_meta`.
+- **LINK-MED-011**: `Shim-Receive` delivers a reconstructed generic frame, optional native route, and optional `recv_meta`.
 - **LINK-MED-012** (restatement of LINK-OVR-022): The shim MUST reconstruct a generic frame from the medium's native framing on receive.
 - **LINK-MED-013**: `Shim-State-Changed` carries `link_id`, a kind of `up`, `down`, `changed`, or `barrier-failed`, and the descriptor or barrier purpose required by that kind; the governor maps it to lifecycle or forced-retirement behaviour.
 - **LINK-MED-014**: `Shim-Describe` returns the shim's current capability descriptor or `unknown-binding`.
@@ -416,7 +457,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-019**: A shim MUST NOT require the link service to know whether the underlying medium is stream- or datagram-oriented.
 - **LINK-MED-020**: The capability descriptor is a logical structure; section 02 normatively defines field semantics, types, allowed values, and validation and consistency rules. The in-host representation is implementation-defined.
 - **LINK-MED-021**: LINK-OVR-009 (big-endian) and LINK-OVR-011 (canonical serialisation) do NOT apply to the capability descriptor, because it is host-local and never crosses a medium.
-- **LINK-MED-022**: The descriptor carries a fixed normative core field-set for v1 as listed in section 4.2.
+- **LINK-MED-022**: The descriptor carries the fixed v1 core field-set, including required `one_way_direction` and `neighbour_mode`.
 - **LINK-MED-023**: A shim MAY report additional properties beyond the core field-set as extension fields.
 - **LINK-MED-024**: The link service MUST distinguish core fields from extension fields.
 - **LINK-MED-025** (specification-suite invariant): The Network layer MAY observe extension fields but MUST NOT depend on them for correctness.
@@ -428,13 +469,13 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-031** (restatement of LINK-OVR-028 and LINK-SVC-027): Where a safety-relevant capability is absent or invalid, the implementation MUST fail closed and behave as if the capability were absent.
 - **LINK-MED-032**: `maximum_frame_size` MUST be an integer within the guaranteed minimum MTU and the global maximum frame size defined in section 03.
 - **LINK-MED-033**: `receive_max_frame_size`, when present, MUST satisfy the same bounds as `maximum_frame_size`; when absent it defaults to `maximum_frame_size`; the resulting value is the operative receive-capacity bound for `bidirectional` and `asymmetric` links.
-- **LINK-MED-034**: `one_way_direction` MUST be present and one of `bidirectional`, `send-only`, `receive-only`, or `asymmetric`; it has no default.
+- **LINK-MED-034**: Required `one_way_direction` and `neighbour_mode` are present, recognised, and have no defaults.
 - **LINK-MED-035**: For each boolean core field, an absent value denotes `false`; an invalid value MUST be treated as `false`.
 - **LINK-MED-036**: For each informational class field, an absent value or the sentinel `unknown` denotes unreported; the link service MUST NOT assign a normative categorical meaning to a present non-`unknown` token (values are opaque, compared for equality only); a malformed present value MUST be treated as `unknown`; the Network layer MAY consult class tokens as hints but MUST NOT depend on them for correctness (the Network-layer clause binds the specification suite).
 - **LINK-MED-037**: `broadcast_support` on a `receive-only` link MUST be normalised to `false`.
 - **LINK-MED-038**: `multicast_support` on a `receive-only` link MUST be normalised to `false`.
 - **LINK-MED-039**: `full_duplex` with `send-only` or `receive-only` MUST be normalised to `false`.
-- **LINK-MED-040**: No further cross-field rule is normative in v1; additional host-local diagnostics MUST NOT reject or alter a descriptor solely under an unstated rule.
+- **LINK-MED-040**: Neighbour-mode direction and broadcast combinations obey section 5.3; no unstated diagnostic may reject or alter a descriptor.
 - **LINK-MED-041**: A structural error, unknown top-level component, or absent or invalid required field MUST prevent `Link-Up`; the link remains `Unavailable`.
 - **LINK-MED-042**: An invalid-descriptor diagnostic MAY be reported through an implementation-defined channel; it is not a normative primitive.
 - **LINK-MED-043** (restatement of LINK-SVC-045): A post-availability descriptor uses the same normalisation and validation pipeline; a hard structural or required-field failure MUST be followed by the down barrier and `Link-Down` with `descriptor-invalid`.
@@ -448,14 +489,14 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-051**: A conforming shim MUST report a descriptor that satisfies the validation and consistency rules of section 5 for any medium binding it intends to surface.
 - **LINK-MED-052** (restatement of LINK-OVR-021): New media are supported by writing new shims; this specification is not revised to enumerate or admit media.
 - **LINK-MED-053** (restatement of LINK-OVR-007): An implementation MAY ship shims for any finite subset of media; additional shims are implementation work and do not affect v1 compliance.
-- **LINK-MED-054** (restatement of LINK-OVR-024): All per-link state owned by the service or shim, including descriptor, parser, native-unit adaptation, and queued-send state, MUST be resource-bounded and remain correct under adversarial input.
+- **LINK-MED-054** (restatement of LINK-OVR-024): Descriptor, parser, native adaptation, route-token, mapping, and queued-send state is resource-bounded and adversarially correct per link.
 - **LINK-MED-055**: The link service MUST NOT interpret a `started` result from `Shim-Start` as asserting that the medium is up; medium availability is surfaced by `Shim-State-Changed` and mapped by the lifecycle governor.
 - **LINK-MED-056**: The link service MUST invoke `Shim-Start` at most once per `link_id`; `Shim-Stop` permanently retires the binding and identifier.
 - **LINK-MED-057**: `Shim-Start` for an existing or retired identifier MUST return `rejected-invalid-state` without altering any binding.
 - **LINK-MED-058**: After `Shim-Stop`, the shim MUST NOT emit further receive or state-change indications for that `link_id`.
 - **LINK-MED-059** (restatement of LINK-SVC-062): Following `Shim-Stop`, the identifier MUST NOT be started or reused during the host run; rediscovery of the same medium uses a new identifier.
 - **LINK-MED-060**: A single medium reception MAY yield zero, one, or several `Shim-Receive` indications, depending on how the native reception maps to generic frames.
-- **LINK-MED-061** (restatement of LINK-SVC-069 and LINK-SVC-070): A `Shim-Receive` indication carrying a frame that fails section 03 validation MUST be discarded by the link service; the discard MUST NOT affect other receptions or links.
+- **LINK-MED-061** (restatement of LINK-SVC-069 and LINK-SVC-070): A `Shim-Receive` failing sections 03 through 05 validation is discarded without affecting other receptions or links.
 - **LINK-MED-062**: A `kind` of `up` does not by itself cause a `Link-Up` if the reported descriptor fails validation per section 5.
 - **LINK-MED-063** (restatement of LINK-SVC-050): The shim MUST NOT silently retry a medium connection or conceal state changes from the link service; any state the shim wishes to surface MUST be surfaced through `Shim-State-Changed`.
 - **LINK-MED-064**: A shim MAY emit `down` after it has emitted `up` and MUST NOT depend on knowing whether the governor emitted `Link-Up`.
@@ -478,7 +519,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-081**: `Shim-Quiesce` establishes a cut-off for `down` or `size-change` and returns exactly `quiesced`, `failed-timeout`, `unknown-binding`, or `rejected-invalid-state`.
 - **LINK-MED-082**: During quiesce new sends are rejected; size-change may resume after the new tuple, while down remains quiescing until `Shim-Stop` and cannot resume.
 - **LINK-MED-083**: An adapter profile MUST define the irreversible native-transmission commit boundary; down may permit a pre-cut-off committed frame to complete after the barrier, while size-change MUST wait for committed work to complete.
-- **LINK-MED-084**: `quiesced` cancels every uncommitted frame for down or returns every occurrence with exact bytes once for size-change, without coalescing identical frames; the shim retains none.
+- **LINK-MED-084**: `quiesced` cancels every uncommitted occurrence for down or returns each exact frame, route, and source-claim token once for size-change without coalescing; the shim retains none.
 - **LINK-MED-085**: Before shim `down`, the shim establishes its cut-off; when admitted, the governor closes service admission and classifies service-owned work before `Link-Down`.
 - **LINK-MED-086**: A stream with an established native adapter profile MAY use it only when peers share it and it satisfies this section's safety requirements.
 - **LINK-MED-087**: Every stream profile MUST define separate finite encoded and decoded storage bounds, a finite lifetime or progress bound, bounded work, deterministic discard and resynchronisation, and link isolation; the canonical profile ceilings are 65,801 encoded and 65,542 decoded bytes per active record unless a smaller incremental strategy is used.
@@ -501,5 +542,8 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-104**: Descriptor input, depth, traversal, normalisation, comparison, and change-set work have finite per-binding budgets; core or structural exhaustion fails hard, while extension exhaustion deterministically drops excess input.
 - **LINK-MED-105**: A timed-out shim-originated barrier MUST close shim admission, fence uncommitted work, and emit non-coalescible `barrier-failed` for the exact binding and purpose; the governor applies LINK-SVC-104 and never publishes a failed reduced tuple.
 - **LINK-MED-106**: On a receive-capable link, the shim MUST NOT emit a frame exceeding the operative receive-capacity bound, and the link service MUST independently check that bound before parsing; either boundary MUST discard an oversized reception in isolation as `receive-frame-size-exceeded` under sections 03 and 06.
-- **LINK-MED-107**: The link service performs full generic-frame structural and semantic validation before `Shim-Send`; a shim independently enforces only complete-unit admission, directional size, adapter-profile, and native resource-safety constraints and need not parse Link TLVs, Control Types, or body semantics.
+- **LINK-MED-107**: The service validates sections 03 through 05 before `Shim-Send`; the shim independently enforces unit, size, route, source-claim, adapter-profile, and resource safety without Link-semantic parsing.
 - **LINK-MED-108**: Every medium mapping has an unambiguously selected peer-shared adapter profile before availability, defining complete-frame mapping, commitment, applicable bounds, whole-frame corruption detection, and deterministic recovery or reset; a direct one-record mapping remains a profile.
+- **LINK-MED-109**: `Shim-Route-Cutoff` invalidates exactly one current native route, returns every associated uncommitted frame-route occurrence once, permits bounded committed completion, and leaves unrelated routes usable under finite failure-safe bounds.
+- **LINK-MED-110**: `Shim-Claim-Cutoff` invalidates exactly one source-claim generation, returns every associated uncommitted occurrence once, and leaves unrelated routes, generations, and source-less work usable.
+- **LINK-MED-111**: `Shim-Route-Invalidated` establishes an adapter-originated selective route cut-off, transfers uncommitted work once, and is ordered with binding ownership and lifecycle operations.
