@@ -96,7 +96,7 @@ The `Send` primitive submits an opaque payload for transmission during an identi
 
 **Logical outputs** (exactly one per invocation):
 
-- `accepted`: the payload was accepted for transmission.
+- `accepted`: the payload was accepted for transmission and is accompanied by the non-zero opaque host-local `send_id` defined in section 06.
 - `rejected-packet-size-exceeded`: the payload length exceeds the link's currently reported maximum packet size.
 - `rejected-malformed`: the inputs are malformed (for example, an unrecognised `link_id`, a zero-length payload, a payload that is not a contiguous byte sequence, or a broadcast destination on a link without broadcast support).
 - `rejected-link-unavailable`: the `link_id` is recognised, but the identified link is not in the `Available` lifecycle state or a down-purpose quiesce has closed service admission.
@@ -111,6 +111,7 @@ The `Send` primitive submits an opaque payload for transmission during an identi
 - Whether a link-layer broadcast destination is permitted on a given link is governed by the capability descriptor (LINK-SVC-032).
 - `Send` MUST NOT block waiting for medium availability beyond a finite, implementation-defined maximum wait interval (LINK-SVC-031).
 - `Send` is asynchronous with respect to medium transmission: `accepted` indicates acceptance for transmission, not delivery (LINK-SVC-033).
+- Before `accepted`, the service atomically reserves the section 06 identity, immutable ownership, transmission state, and exact terminal-outcome capacity. Failure to reserve those bounded resources is `rejected-queue-full` under LINK-SVC-090.
 - If `Send` is invoked on a recognised `link_id` whose lifecycle state is not `Available`, or is ordered after a down-purpose quiesce closed service admission, the output MUST be `rejected-link-unavailable` (LINK-SVC-080).
 - If the supplied `epoch` does not equal the current epoch of an `Available` link, the output MUST be `rejected-stale-epoch`, and the payload MUST NOT be queued or transmitted (LINK-SVC-101).
 - If the link is `Available` but its validated direction does not support sending, the output MUST be `rejected-direction-unsupported` (LINK-SVC-089).
@@ -179,6 +180,7 @@ The `Link-Down` primitive indicates that a link is no longer available for use (
 - `Link-Down` does not, by itself, release resources owned by open reassembly contexts or retransmission buffers on the link; resource handling on link termination is defined in sections 04 and 06, and release on transition to `Retired` is required by LINK-SVC-085 (LINK-SVC-041).
 - `Link-Down` for a `link_id` that is already `Unavailable`, `Unavailable-Pending-Up`, or `Retired` MUST NOT be emitted (LINK-SVC-049).
 - Before a service-originated `Link-Down` is emitted, the link service MUST complete the binding-scoped quiesce barrier defined in section 02 (LINK-SVC-094). The cut-off closes service admission and classifies every service-owned and shim-owned frame exactly once. A `Send` ordered after the cut-off is rejected as `rejected-link-unavailable`; service-owned uncommitted work is cancelled; shim-owned uncommitted work is cancelled by the barrier; and no uncommitted frame may begin transmission afterwards. A frame committed before the cut-off MAY complete under the adapter profile. After `Link-Down`, the service MUST complete `Shim-Stop` and transition the identifier to `Retired` (LINK-SVC-102). A shim-originated temporary-loss `down` establishes an equivalent cut-off but MAY transition to `Unavailable-Pending-Up`. The Network layer MUST treat every accepted `Send` without a separately defined successful completion outcome as potentially lost once `Link-Down` is emitted (LINK-SVC-087).
+- Section 06 emits every pending exact terminal send outcome and the ending diagnostic snapshot before `Link-Down`. A permitted later physical completion cannot revise an emitted outcome.
 
 ### 4.6 Upward: Link-Changed
 
@@ -199,7 +201,7 @@ The `Link-Changed` primitive indicates that a capability or reported service siz
 - `Link-Changed` MUST NOT be emitted unless the link is currently `Available` (LINK-SVC-044).
 - `Link-Changed` MUST NOT carry a capability value that fails validation against section 02; an invalid reported value MUST fail closed per LINK-SVC-027 and, where the invalid value affects availability, MUST be followed by `Link-Down` (LINK-SVC-045).
 - The descriptor, MTU, and maximum packet size carried by one `Link-Changed` MUST form one internally coherent tuple observed at the event's logical emission point (LINK-SVC-093).
-- Before a reduced MTU or maximum packet size becomes authoritative through `Link-Changed`, the service and shim MUST establish the size-change barrier defined in section 02 (LINK-SVC-095). Every `Send` is linearised either before the cut-off under the old tuple or after `Link-Changed` under the new tuple. A call ordered after the cut-off is evaluated only after the new tuple is authoritative; its wait remains bounded by LINK-SVC-031, and bounded admission exhaustion returns `rejected-queue-full`. Every old-tuple frame still owned by the service is returned to framing control exactly once. Shim-owned work MUST either complete under the old tuple before the barrier returns or be returned exactly once for reframing. The service MUST NOT promise to reframe committed work; the barrier waits for it to complete (LINK-SVC-046).
+- Before a reduced MTU or maximum packet size becomes authoritative through `Link-Changed`, the service and shim MUST establish the size-change barrier defined in section 02 (LINK-SVC-095). Every `Send` is linearised either before the cut-off under the old tuple or after `Link-Changed` under the new tuple. A call ordered after the cut-off is evaluated only after the new tuple is authoritative; its wait remains bounded by LINK-SVC-031, and bounded admission exhaustion returns `rejected-queue-full`. Every old-tuple frame still owned by the service is returned to framing control exactly once. Shim-owned work MUST either complete under the old tuple before the barrier returns or be returned exactly once. Returned best-effort work proceeds to reframing under section 04. Returned work belonging to a reliable fixed frame plan proceeds under section 06 and is either continued byte-identically when the plan and its governing semantics remain valid or cancelled when the transaction terminalises. The service MUST NOT promise to reframe committed work; the barrier waits for it to complete (LINK-SVC-046).
 - A change of medium binding is not a capability change. The old binding is retired and any rediscovered binding receives a new `link_id`; it is never surfaced as `Link-Changed` (LINK-SVC-082).
 
 ### 4.7 Downward: Link-Query
@@ -213,6 +215,7 @@ The `Link-Query` primitive returns the link service's current authoritative stat
 **Logical outputs** (exactly one alternative per invocation):
 
 - `known`: accompanied by `state` (the link's current lifecycle state per section 5), `descriptor` (the current validated capability descriptor as defined in section 02), `epoch` (the generation value most recently reported by `Link-Up`), `mtu` (the currently reported MTU), and `max_packet_size` (the currently reported maximum packet size). For a known `link_id` that has never validated a descriptor, `descriptor` is `null`/absent and `epoch`, `mtu`, and `max_packet_size` are `unset`. For a known `link_id` that is not currently `Available` but has previously validated a descriptor, the returned values are the most recently validated or reported values and are stale per LINK-SVC-086.
+- A `known` result MAY include the same authoritative current section 06 diagnostic snapshot, or the most recent final snapshot marked stale while an unavailable or retired record remains retained. It MUST NOT construct a competing quality baseline.
 - `unknown-link`: the `link_id` is not recognised.
 
 **Constraints and ordering:**
@@ -369,7 +372,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-SVC-027** (restatement of LINK-OVR-028): Where a safety-relevant capability is absent or invalid, the implementation MUST fail closed and behave as if the capability were absent.
 - **LINK-SVC-028**: Every compliant link MUST support all primitives in section 4. Each primitive is defined normatively by its logical inputs, logical outputs, and the constraints and ordering rules that govern its invocation, not by any particular syntactic function shape.
 - **LINK-SVC-029**: The `Send` primitive submits an opaque payload for transmission on an identified link and availability epoch to an identified link-layer destination.
-- **LINK-SVC-030**: The set of `Send` outputs is exactly `accepted`, `rejected-packet-size-exceeded`, `rejected-malformed`, `rejected-link-unavailable`, `rejected-stale-epoch`, `rejected-direction-unsupported`, `rejected-stale-destination`, and `rejected-queue-full`.
+- **LINK-SVC-030**: The set of `Send` outputs is exactly `accepted` with section 06 `send_id`, `rejected-packet-size-exceeded`, `rejected-malformed`, `rejected-link-unavailable`, `rejected-stale-epoch`, `rejected-direction-unsupported`, `rejected-stale-destination`, and `rejected-queue-full`.
 - **LINK-SVC-031**: `Send` MUST NOT block waiting for medium availability beyond a finite, implementation-defined maximum wait interval.
 - **LINK-SVC-032**: Whether a link-layer broadcast destination is permitted on a given link is governed by the capability descriptor.
 - **LINK-SVC-033**: `Send` is asynchronous with respect to medium transmission; `accepted` indicates acceptance for transmission, not delivery.
@@ -385,7 +388,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-SVC-043**: The `Link-Changed` primitive indicates that a capability or service size of an already-up link has changed. Its logical outputs are `link_id`, `descriptor`, `mtu`, `max_packet_size`, and `change_set`; `change_set` MUST enumerate every changed descriptor field or service size using the defined namespaces.
 - **LINK-SVC-044**: `Link-Changed` MUST NOT be emitted unless the link is currently `Available`.
 - **LINK-SVC-045**: `Link-Changed` MUST NOT carry a descriptor value that fails validation; invalid optional values are normalised safely, and an invalid value that affects availability MUST be followed by `Link-Down`.
-- **LINK-SVC-046**: Before a reduced size becomes authoritative, sends are ordered against a barrier; committed old-tuple work completes before it returns, while every uncommitted frame is returned exactly once for reframing before `Link-Changed`.
+- **LINK-SVC-046**: Before a reduced size becomes authoritative, sends are ordered against a barrier; committed old-tuple work completes before it returns, while every uncommitted frame is returned exactly once for best-effort reframing or reliable fixed-plan handling before `Link-Changed`.
 - **LINK-SVC-047**: Each allocated `link_id` is in exactly one of `Unavailable`, `Available`, `Unavailable-Pending-Up`, or terminal `Retired` until its record is released; it begins in `Unavailable`.
 - **LINK-SVC-048**: In `Unavailable-Pending-Up`, the service MAY keep host-local state, bounded per LINK-SVC-072, but MUST NOT accept `Send` until a subsequent `Link-Up`.
 - **LINK-SVC-049**: A lifecycle event of the same type MUST NOT be emitted twice in succession for the same `link_id` without an intervening event of the other type: no `Link-Up` while `Available`, no `Link-Down` while `Unavailable`, `Unavailable-Pending-Up`, or `Retired`, and no `Link-Down` for a link that has never emitted `Link-Up`; a coalesced pre-availability `up, down` sequence emits neither service event.

@@ -69,6 +69,7 @@ The `Shim-Send` operation hands a generic frame, as defined in section 03, to th
 **Logical inputs:**
 
 - `link_id`: the handle of the link.
+- `shim_tx_id`: a non-zero opaque section 06 frame-occurrence identifier scoped to this binding and epoch.
 - `frame`: a generic frame per section 03, carrying a complete Network payload or one payload fragment and link-layer addressing per sections 04 and 05.
 - `native_route`: the opaque bounded section 05 route token selected for this frame, or absent only where the adapter profile defines an implicit route.
 - `source_claim_generation`: an opaque bounded section 05 local-claim generation token for a source-bearing frame, or absent for a source-less frame.
@@ -101,7 +102,7 @@ The `Shim-Quiesce` operation establishes a binding-scoped ownership cut-off befo
 
 **Logical outputs** (exactly one per invocation):
 
-- `quiesced`: no frame that remained uncommitted at the cut-off can begin native transmission. For `size-change`, this result is accompanied by `returned_frames`, containing every uncommitted generic frame and its associated native route removed from shim ownership, and every frame committed before the cut-off has completed native transmission. For `down`, uncommitted frame-route pairs are cancelled, `returned_frames` is empty, and every reception admitted before the receive cut-off has been emitted as `Shim-Receive` or discarded under the observable-discard rules.
+- `quiesced`: no frame that remained uncommitted at the cut-off can begin native transmission. For `size-change`, this result is accompanied by `returned_frames`, containing every uncommitted generic frame with its `shim_tx_id`, native route, and source-claim generation removed from shim ownership, and every frame committed before the cut-off has completed native transmission. For `down`, uncommitted occurrences are cancelled, `returned_frames` is empty, and every reception admitted before the receive cut-off has been emitted as `Shim-Receive` or discarded under the observable-discard rules.
 - `failed-timeout`: the barrier failed or exceeded its finite deadline. Shim admission remains closed and the binding must be forced down and retired under LINK-SVC-104.
 - `unknown-binding`: no live binding exists for `link_id`.
 - `rejected-invalid-state`: no barrier is applicable in the binding's current state.
@@ -110,7 +111,7 @@ The `Shim-Quiesce` operation establishes a binding-scoped ownership cut-off befo
 
 - Once `Shim-Quiesce` begins, the shim MUST reject new `Shim-Send` operations for the binding. After a successful `size-change` barrier, sending MAY resume under the new coherent tuple after `Link-Changed`. After a successful `down` barrier, the binding remains quiescing until `Shim-Stop`; it cannot resume and no new `Shim-Send` is permitted (LINK-MED-082).
 - For `down`, a frame irreversibly committed to native transmission before the cut-off MAY complete after the barrier. For `size-change`, every pre-cut-off committed frame MUST complete before `quiesced` is returned. The applicable adapter profile MUST define the commit boundary precisely enough to distinguish committed from cancellable work (LINK-MED-083).
-- A `quiesced` result MUST NOT be returned until every uncommitted frame-route occurrence has been cancelled for `down` or returned exactly once in `returned_frames` for `size-change`. The bounded `returned_frames` collection is present even when empty; every item contains exactly `frame`, `native_route`, and `source_claim_generation`, with either token absent only where permitted by its contract. It preserves every occurrence and exact frame bytes, MUST NOT coalesce byte-identical frames, and has no semantically significant ordering. Ownership transfers exactly once. The shim MUST NOT retain cancelled or returned work and MUST NOT carry it into a later availability epoch (LINK-MED-084).
+- A `quiesced` result MUST NOT be returned until every uncommitted frame-route occurrence has been cancelled for `down` or returned exactly once in `returned_frames` for `size-change`. The bounded `returned_frames` collection is present even when empty; every item contains exactly `shim_tx_id`, `frame`, `native_route`, and `source_claim_generation`, with either route or claim token absent only where permitted by its contract. It preserves every occurrence and exact frame bytes, MUST NOT coalesce byte-identical frames, and has no semantically significant ordering. Ownership transfers exactly once. The shim MUST NOT retain cancelled or returned work and MUST NOT carry it into a later availability epoch (LINK-MED-084).
 - For a `down` barrier, the shim MUST establish a receive cut-off. It MUST emit every admitted pre-cut-off `Shim-Receive` before the barrier completes or discard it under the section 06 observability mechanism. It MUST drain, cancel, or irrevocably fence every incomplete stream prefix, native subdivision or aggregation context, delayed native callback, byte, native unit, and metadata item belonging to the ending episode. No old-side input may contribute to a later `Shim-Receive`; later receptions are discarded and never retained for a later episode (LINK-MED-098).
 - Every barrier MUST have a finite implementation-defined or adapter-profile-defined deadline (LINK-MED-100). If it cannot complete within that deadline, the shim MUST return `failed-timeout`, keep send and receive admission closed, and discard or irrevocably fence every uncommitted send, receive context, native callback, and metadata item. A failed size change MUST NOT emit or authorise the reduced descriptor. The service then applies LINK-SVC-104 (LINK-MED-100).
 
@@ -213,7 +214,15 @@ The Link service closes admission for the affected logical destination before in
 
 `Shim-Route-Invalidated` reports adapter-originated invalidation of one exact current native route (LINK-MED-111). Before emitting it, the shim MUST close admission through that token, permit only already committed completion, and remove every uncommitted occurrence from shim ownership. The indication carries `link_id`, the current epoch, `native_route`, and the bounded `returned_frames` collection defined by `Shim-Quiesce`. It is ordered with `Shim-Send`, both selective cut-offs, binding-wide barriers, receive indications, and lifecycle indications for the binding. The service then invalidates the associated internal observation or route, applies destination abandonment exactly once, and emits the section 05 aggregate transition. A profile unable to isolate one route MUST use the binding-wide down path instead.
 
-### 2.12 Binding operation states
+### 2.12 Upward: Shim-Transmit-Outcome
+
+`Shim-Transmit-Outcome` terminates normal shim ownership of one accepted frame occurrence (LINK-MED-112). It carries `link_id`, current `epoch`, `shim_tx_id`, and exactly one result from `attempt-complete`, `failed-before-commit`, or `failed-after-commit`.
+
+`attempt-complete` means the profile-defined native attempt, including any native retransmission, reached its normal completion boundary and asserts no receipt. `failed-before-commit` proves that the occurrence never crossed irreversible commitment. `failed-after-commit` means commitment occurred or cannot be disproved without normal completion (LINK-MED-113). No result asserts complete-packet delivery.
+
+For one accepted occurrence, exactly one `Shim-Transmit-Outcome`, uncommitted barrier return, or down cancellation is permitted (LINK-MED-114). Outcomes are ordered with send admission, selective cut-offs, quiesce, route invalidation, state indications, and stop. Unknown, duplicate, stale, or post-fence outcomes are discarded and diagnosed under section 06 without affecting another occurrence or revising a terminal packet.
+
+### 2.13 Binding operation states
 
 For operation validation, a shim binding is logically in one of `bound-down`, `bound-up`, `quiescing`, or `retired` (LINK-MED-096). `started` creates `bound-down`; an emitted `up` enters `bound-up`; a shim-originated temporary-loss `down` enters `bound-down`; `Shim-Quiesce` enters `quiescing`; a successful size change returns to `bound-up` after `Link-Changed`, while a down-purpose barrier remains `quiescing` until `Shim-Stop`; and `Shim-Stop` enters terminal `retired`.
 
@@ -309,6 +318,7 @@ The following cross-field rules are applied during optional-field normalisation:
 - `multicast_support` on a `receive-only` link MUST be normalised to `false` for the same reason (LINK-MED-038).
 - `full_duplex` together with `one_way_direction` of `send-only` or `receive-only` MUST be normalised to `false` (LINK-MED-039).
 - A `receive-only` link MUST use `neighbour_mode` of `none`. A `send-only` link MUST NOT use `active-advertisement`. `active-advertisement` requires `one_way_direction` of `bidirectional` or `asymmetric` and normalised `broadcast_support` of `true`. A violation is an invalid required-field combination and cannot be normalised into validity.
+- A `receive-only` link normalises `reliable_delivery` and `native_retransmission` to `false`. Any send-capable link normalises `reliable_delivery` to `false` unless its validated adapter profile provides the complete section 06 proof, timing, return-path, terminal-state, resource, and conformance contract for every eligible unicast and implicit-peer destination. A send-only service link may retain `reliable_delivery = true` only through a strict profile-native proof path. `native_retransmission = true` requires the complete bounded section 06 retry contract.
 - No further cross-field rule is defined in v1. An implementation MAY apply additional host-local diagnostics but MUST NOT reject or alter a descriptor solely on the basis of a rule not stated here (LINK-MED-040).
 
 ### 5.4 Invalid descriptor handling
@@ -475,7 +485,7 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-037**: `broadcast_support` on a `receive-only` link MUST be normalised to `false`.
 - **LINK-MED-038**: `multicast_support` on a `receive-only` link MUST be normalised to `false`.
 - **LINK-MED-039**: `full_duplex` with `send-only` or `receive-only` MUST be normalised to `false`.
-- **LINK-MED-040**: Neighbour-mode direction and broadcast combinations obey section 5.3; no unstated diagnostic may reject or alter a descriptor.
+- **LINK-MED-040**: Neighbour-mode, direction, broadcast, reliable-delivery, proof-path, and native-retransmission combinations obey section 5.3; no unstated diagnostic may reject or alter a descriptor.
 - **LINK-MED-041**: A structural error, unknown top-level component, or absent or invalid required field MUST prevent `Link-Up`; the link remains `Unavailable`.
 - **LINK-MED-042**: An invalid-descriptor diagnostic MAY be reported through an implementation-defined channel; it is not a normative primitive.
 - **LINK-MED-043** (restatement of LINK-SVC-045): A post-availability descriptor uses the same normalisation and validation pipeline; a hard structural or required-field failure MUST be followed by the down barrier and `Link-Down` with `descriptor-invalid`.
@@ -547,3 +557,6 @@ The following normative requirements are defined in this section. Entries marked
 - **LINK-MED-109**: `Shim-Route-Cutoff` invalidates exactly one current native route, returns every associated uncommitted frame-route occurrence once, permits bounded committed completion, and leaves unrelated routes usable under finite failure-safe bounds.
 - **LINK-MED-110**: `Shim-Claim-Cutoff` invalidates exactly one source-claim generation, returns every associated uncommitted occurrence once, and leaves unrelated routes, generations, and source-less work usable.
 - **LINK-MED-111**: `Shim-Route-Invalidated` establishes an adapter-originated selective route cut-off, transfers uncommitted work once, and is ordered with binding ownership and lifecycle operations.
+- **LINK-MED-112**: `Shim-Transmit-Outcome` terminates normal shim ownership of one accepted occurrence by exact binding, epoch, and `shim_tx_id`.
+- **LINK-MED-113**: Shim occurrence results distinguish attempt completion, proved pre-commit failure, and possible or actual post-commit failure without asserting delivery.
+- **LINK-MED-114**: Each accepted shim occurrence ends exactly once by outcome, return, or cancellation; invalid late outcomes are isolated and diagnosed.

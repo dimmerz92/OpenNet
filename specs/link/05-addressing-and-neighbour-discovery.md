@@ -57,11 +57,11 @@ On an `implicit-peer` binding, Data frames MUST omit Destination Link Address an
 
 Every transmitted Data frame MUST use exactly one destination form: explicit unicast, broadcast, multicast, or binding-implicit (LINK-ADR-013). Broadcast and multicast transmission additionally require their section 02 send-direction capability. A sender MUST NOT encode more than one form.
 
-Source Link Address is optional on Data frames (LINK-ADR-014). When present, Sender Incarnation MUST also be present. Sender Incarnation MAY be present without Source Link Address only where another section requires sender separation without a routable return address.
+Source Link Address is optional on best-effort Data frames (LINK-ADR-014). When present, Sender Incarnation MUST also be present. Sender Incarnation MAY be present without Source Link Address only where another section requires sender separation without a routable return address. Section 06 reliable explicit-unicast Data requires both source fields; reliable implicit-peer Data uses the binding-specific incarnation.
 
 A fragmented Data frame MUST carry Sender Incarnation unless the adapter profile supplies an equally stable binding-specific peer incarnation for an implicit single-peer binding (LINK-ADR-015). A source-less sender MAY use a fresh packet-scoped incarnation. Unfragmented anonymous Data may omit both source fields.
 
-Addressing TLVs on a Control frame are permitted only as specified by that Control Type (LINK-ADR-016). A Control Type definition must state its exact destination form, source requirements, incarnation requirements, body syntax, and permitted additional TLVs.
+Addressing TLVs on a Control frame are permitted only as specified by that Control Type (LINK-ADR-016). A Control Type definition must state its exact destination form, source requirements, incarnation requirements, body syntax, and permitted additional TLVs. Section 06 Packet Acknowledgement reverses the acknowledged packet's explicit source and destination claims, or omits addressing on an implicit-peer binding.
 
 An invalid kind, length, combination, class, zero incarnation, duplicated field, or forbidden field is `addressing-malformed` and MUST be discarded before neighbour, route, fragmentation, or reassembly allocation (LINK-ADR-017). The discard affects no unrelated frame, observation, destination, or link.
 
@@ -238,9 +238,9 @@ This summary is a navigation aid. The normative prose above is authoritative.
 - **LINK-ADR-011**: Explicit unicast requires destination address and incarnation; broadcast and multicast forbid destination incarnation.
 - **LINK-ADR-012**: Implicit-peer Data omits destination fields; omission elsewhere is forbidden unless a Control definition permits it.
 - **LINK-ADR-013**: Every transmitted Data frame uses exactly one valid destination form and required capability.
-- **LINK-ADR-014**: Data source is optional; a present source requires sender incarnation.
+- **LINK-ADR-014**: Best-effort Data source is optional; a present source requires sender incarnation, while explicit reliable Data requires both source fields.
 - **LINK-ADR-015**: Fragmented Data carries sender incarnation unless a safe implicit-peer incarnation is supplied by the binding.
-- **LINK-ADR-016**: Each Control Type defines its complete permitted addressing form.
+- **LINK-ADR-016**: Each Control Type defines its complete permitted addressing form, including acknowledgement claim reversal or implicit omission.
 - **LINK-ADR-017**: Malformed addressing is discarded before neighbour, route, fragmentation, or reassembly allocation.
 - **LINK-ADR-018**: The maximum mandatory offset-zero fragmented Data header is 133 bytes, leaving 123 bytes at MTU 256.
 - **LINK-ADR-019**: The descriptor contains exactly one required neighbour mode from the four defined values.

@@ -18,7 +18,7 @@ An unfragmented Data frame contains none of the fragmentation TLVs allocated by 
 
 ### 2.2 Fragmented form
 
-Every fragmented Data frame contains Packet Identifier, Packet Length, and Fragment Offset TLVs. The fragment whose offset is zero additionally contains Packet CRC-32C; every non-zero-offset fragment forbids Packet CRC-32C (LINK-FRG-004). A partial combination is malformed.
+Every fragmented Data frame contains Packet Identifier, Packet Length, and Fragment Offset TLVs. The fragment whose offset is zero additionally contains Packet CRC-32C; every non-zero-offset fragment forbids Packet CRC-32C (LINK-FRG-004). Packet Identifier alone is also permitted on an unfragmented Data frame when section 06 reliable delivery applies; its complete body is the packet and Packet Length, Fragment Offset, and Packet CRC-32C are forbidden. Every other partial combination is malformed.
 
 Version 1 allocates these TLV types (LINK-FRG-005):
 
@@ -33,9 +33,9 @@ These assignments occupy the section 03 version 1 TLV namespace. Later sections 
 
 ### 2.3 Packet Identifier
 
-Packet Identifier is scoped to one sender incarnation and identifies all fragments of one Network packet (LINK-FRG-006). It is not a global identifier and requires no central allocator.
+Packet Identifier is scoped to one sender incarnation and identifies one complete Network packet (LINK-FRG-006). It identifies all fragments when fragmentation is used and, under section 06, identifies an unfragmented reliable packet and its acknowledgement. It is not a global identifier and requires no central allocator.
 
-A sender MUST NOT reuse a Packet Identifier during one sender incarnation (LINK-FRG-007). It MAY allocate identifiers using a monotonic counter, collision-checked random selection, or another method satisfying that rule. Before allocation state could wrap, repeat, or be lost, the sender MUST establish a new incarnation discriminator. This prohibition is deliberately stronger than attempting to estimate every receiver's retention lifetime.
+A sender MUST NOT reuse a Packet Identifier during one sender incarnation (LINK-FRG-007). The prohibition applies across fragmented and unfragmented reliable packets. It MAY allocate identifiers using a monotonic counter, collision-checked random selection, or another method satisfying that rule. Before allocation state could wrap, repeat, or be lost, the sender MUST establish a new incarnation discriminator. This prohibition is deliberately stronger than attempting to estimate every receiver's retention lifetime.
 
 ### 2.4 Packet Length and Fragment Offset
 
@@ -124,9 +124,9 @@ An intrinsic `Shim-Send.rejected-malformed` for a service-generated fragment is 
 
 An MTU increase does not invalidate already constructed frames; unsubmitted work MAY remain in its existing valid form (LINK-FRG-031). New admissions use the new coherent tuple after `Link-Changed`.
 
-For an MTU or maximum-packet-size decrease, the size-change barrier classifies work against one side of its cut-off (LINK-FRG-032). Committed fragments complete under the old tuple. Uncommitted frames are returned to Link framing control, and their uncovered byte ranges are reframed under the new tuple using the same Packet Identifier, Packet Length, Packet CRC-32C, destination, and offsets. Bytes already committed MUST NOT be emitted again solely because the tuple changed.
+For an MTU or maximum-packet-size decrease, the size-change barrier classifies work against one side of its cut-off (LINK-FRG-032). Committed fragments complete under the old tuple. For best-effort packets, uncommitted frames are returned to Link framing control and their uncovered byte ranges are reframed under the new tuple using the same Packet Identifier, Packet Length, Packet CRC-32C, destination, and offsets. Bytes already committed MUST NOT be emitted again solely because the tuple changed. For a section 06 reliable fixed frame plan, returned occurrences are not reframed: the plan continues byte-identically only when it and all governing reliability semantics remain valid under the new tuple, otherwise the transaction terminalises and the returned occurrences are cancelled.
 
-If the remaining uncovered ranges cannot complete within the new frame-size, packet-size, or 256-fragment bounds, the service MUST abandon them as `send-invalidated-by-size-change` (LINK-FRG-033). Acceptance was best-effort and is not converted into a synchronous result, but the abandonment is observable under section 06.
+If the remaining best-effort uncovered ranges cannot complete within the new frame-size, packet-size, or 256-fragment bounds, the service MUST abandon them as `send-invalidated-by-size-change` (LINK-FRG-033). Acceptance was best-effort and is not converted into a synchronous result, but the abandonment is observable under section 06. A reliable transaction invalidated by the change instead follows the section 06 terminal result and `size-change-invalidated` reason rules.
 
 ## 5. Receive validation and reassembly
 
@@ -152,7 +152,7 @@ The Link service MUST complete section 03 framing and section 05 addressing, inc
 10. enforce resource admission; and
 11. retain the fragment and test for completion.
 
-An implementation MAY fuse or short-circuit checks only when it preserves the same primary classification, state transition, and unrelated-state behaviour. A completion-tombstone match silently discards the fragment as an already delivered duplicate. A conflict or integrity tombstone match discards the fragment with the tombstone's stored terminal classification. No tombstone match allocates or extends a context, extends the tombstone, or retains fragment bytes.
+An implementation MAY fuse or short-circuit checks only when it preserves the same primary classification, state transition, and unrelated-state behaviour. A completion-tombstone match silently discards the fragment as an already delivered duplicate, except that a live section 06 reliable terminal record diverts a structurally and semantically valid matching retry to the bounded acknowledgement-repetition rule after framing and addressing validation and before ordinary completion-tombstone discard. A conflict or integrity tombstone match discards the fragment with the tombstone's stored terminal classification. No tombstone or reliable terminal-record match allocates or extends a reassembly context, extends either deadline, or retains fragment bytes.
 
 The first accepted non-tombstoned fragment creates a context and fixes its key, Packet Length, creation time, expiry, and any Packet CRC-32C present on offset zero (LINK-FRG-037). A non-zero-offset fragment may create the context before the expected CRC is known. The offset-zero fragment fixes the CRC when it arrives.
 
@@ -181,9 +181,9 @@ A context is complete only when at least two accepted non-duplicate fragments co
 
 Before `Receive`, the Link service MUST calculate CRC-32C over the reconstructed bytes in increasing offset order and compare it with Packet CRC-32C (LINK-FRG-043). Mismatch discards the context, installs a conflict tombstone carrying `reassembly-integrity-failed` through the original expiry, and classifies `reassembly-integrity-failed`.
 
-On a match, the receiver MUST install a completion tombstone before making the complete opaque packet observable through one `Receive` invocation (LINK-FRG-044). The completion tombstone retains the complete reassembly key through the expiry that the completed context would have had, retains no fragment body, and uses the same non-refreshing deadline. The receiver then releases fragment storage as soon as permitted by the service representation.
+On a match, the receiver MUST install a completion tombstone before making the complete opaque packet observable through one `Receive` invocation (LINK-FRG-044). For a fragmented reliable transaction, the authoritative section 06 terminal record satisfies this completion-tombstone obligation and follows section 06's identity, lifetime, acknowledgement, capacity, and non-eviction rules. Otherwise, the completion tombstone retains the complete reassembly key through the expiry that the completed context would have had, retains no fragment body, and uses the same non-refreshing deadline. The receiver then releases fragment storage as soon as permitted by the service representation.
 
-One fragmented-packet identity produces at most one `Receive` while its completion tombstone remains present (LINK-FRG-045). This does not claim general duplicate suppression: the same payload under a new Packet Identifier and unfragmented duplicate frames remain governed by section 07.
+One fragmented-packet identity produces at most one `Receive` while its completion tombstone or composed section 06 reliable terminal record remains present (LINK-FRG-045). This does not claim general duplicate suppression: the same payload under a new Packet Identifier and unfragmented duplicate frames remain governed by section 07.
 
 ## 6. Resource bounds and lifecycle
 
@@ -221,7 +221,7 @@ After validation and before retaining a fragment, the receiver MUST enforce pack
 
 The local eviction policy is implementation-defined and MAY be deterministic, adaptive, or randomised, but it MUST be documented, bounded, isolated to the affected link, and incapable of evicting a completed packet already being delivered merely to admit incomplete work (LINK-FRG-050). Any randomness affecting conformance-observable outcomes MUST be injectable, seedable, or otherwise controllable by a conformance harness. An evicted live key SHOULD receive a bounded conflict-style tombstone when capacity permits, preventing immediate reallocation churn. Exact duplicate input consumes no new fragment or body capacity.
 
-Conflict, integrity, and completion tombstones are mandatory terminal states. Each retains the complete reassembly key, its fixed original-context expiry, and, for a conflict or integrity tombstone, its terminal classification. When tombstone capacity is full, installation MUST atomically replace an existing tombstone selected by the documented bounded eviction policy. Replacement MUST NOT affect a completed packet already being delivered. Eviction may permit later reallocation or duplicate delivery after the evicted suppression state is lost; section 07 owns any stronger advertised duplicate-suppression guarantee.
+Conflict, integrity, and completion tombstones are mandatory terminal states. Each retains the complete reassembly key, its fixed original-context expiry, and, for a conflict or integrity tombstone, its terminal classification. A composed section 06 reliable terminal record is a completion tombstone for these requirements but remains governed by section 06's longer lifetime and non-eviction rule. When ordinary tombstone capacity is full, installation MUST atomically replace an existing evictable tombstone selected by the documented bounded eviction policy. Replacement MUST NOT evict a live reliable terminal record or affect a completed packet already being delivered. Eviction may permit later reallocation or duplicate delivery after the evicted suppression state is lost; section 07 owns any stronger advertised duplicate-suppression guarantee.
 
 ### 6.4 Availability epochs and retirement
 
@@ -343,10 +343,10 @@ This summary is a navigation aid. The normative prose above is authoritative.
 - **LINK-FRG-001**: Fragmentation is internal to Link; one `Send` and one successful `Receive` each carry one complete opaque Network payload.
 - **LINK-FRG-002**: Shim-native subdivision is distinct and reconstructs complete byte-identical canonical frames before Link processing.
 - **LINK-FRG-003**: An unfragmented Data frame has no fragmentation TLVs and carries the complete packet; a fitting packet uses this form.
-- **LINK-FRG-004**: Every fragment has Identifier, Length, and Offset; only offset zero additionally has Packet CRC-32C; partial combinations are malformed.
+- **LINK-FRG-004**: Fragmented frames carry Identifier, Length, Offset, and offset-zero CRC; Identifier alone is permitted only for unfragmented reliable Data; other partial combinations are malformed.
 - **LINK-FRG-005**: Version 1 allocates TLV types `0x02` through `0x05` as defined in section 2.2.
-- **LINK-FRG-006**: Packet Identifier is sender-incarnation scoped and centrally unallocated.
-- **LINK-FRG-007**: A sender never reuses a Packet Identifier within one incarnation and changes incarnation before allocation state can repeat or be lost.
+- **LINK-FRG-006**: Packet Identifier is sender-incarnation scoped, centrally unallocated, and identifies one fragmented or unfragmented reliable packet.
+- **LINK-FRG-007**: A sender never reuses a Packet Identifier across fragmented or reliable uses within one incarnation and changes incarnation before allocation state can repeat or be lost.
 - **LINK-FRG-008**: Packet Length is the complete packet byte length from 1 through 65,535.
 - **LINK-FRG-009**: Fragment Offset and non-empty body define a non-wrapping range wholly inside Packet Length; one fragment cannot cover a complete fragmented packet.
 - **LINK-FRG-010**: Packet CRC-32C occurs exactly on offset zero.
@@ -371,8 +371,8 @@ This summary is a navigation aid. The normative prose above is authoritative.
 - **LINK-FRG-029**: Transient shim queue exhaustion may retry bounded admission without unbounded work or duplicate range ownership.
 - **LINK-FRG-030**: Intrinsic malformed rejection of a service-generated fragment observably abandons the packet without indefinite retry.
 - **LINK-FRG-031**: MTU increase does not invalidate existing valid frames; new admissions use the new tuple.
-- **LINK-FRG-032**: Size reduction lets committed frames complete and reframes only uncommitted uncovered ranges under the new tuple without resending committed bytes solely for the change.
-- **LINK-FRG-033**: A remainder unrepresentable under the reduced tuple is observably abandoned as `send-invalidated-by-size-change`.
+- **LINK-FRG-032**: Size reduction lets committed frames complete, reframes best-effort uncovered ranges, and applies byte-identical continue-or-terminalise handling to reliable fixed plans.
+- **LINK-FRG-033**: An unrepresentable best-effort remainder is observably abandoned, while reliable invalidation follows section 06 outcome semantics.
 - **LINK-FRG-034**: Reassembly key is link, local epoch, sender incarnation, and Packet Identifier.
 - **LINK-FRG-035** (specification-suite invariant): Section 05 Sender Incarnation or the implicit-peer profile supplies the restart-safe reassembly discriminator.
 - **LINK-FRG-036**: Sections 03 and 05 validation precedes the specified section 04 semantic order and every allocation or extension.
@@ -383,8 +383,8 @@ This summary is a navigation aid. The normative prose above is authoritative.
 - **LINK-FRG-041**: Conflict discards and tombstones the context through original expiry with stored classification `reassembly-conflict`.
 - **LINK-FRG-042**: Completion requires at least two accepted fragments and exact gap-free coverage with known CRC.
 - **LINK-FRG-043**: CRC is verified before `Receive`; mismatch discards and tombstones through original expiry with stored classification `reassembly-integrity-failed`.
-- **LINK-FRG-044**: A passing completion tombstone retains the complete key through original-context expiry and is installed before one complete packet becomes observable.
-- **LINK-FRG-045**: One tombstoned fragmented identity produces at most one `Receive`; broader duplicate suppression remains section 07-owned.
+- **LINK-FRG-044**: Passing reassembly installs completion suppression before one packet becomes observable; a reliable terminal record composes this state under section 06.
+- **LINK-FRG-045**: One fragmented identity under a completion tombstone or composed reliable terminal record produces at most one `Receive`; broader duplicate suppression remains section 07-owned.
 - **LINK-FRG-046**: Implementations expose finite packet, context, byte, metadata, tombstone, work, and lifetime limits; an available receive-capable link has positive terminal-suppression capacity, and fragments per packet never exceed 256.
 - **LINK-FRG-047**: Defensible inter-fragment timing derives a non-refreshing absolute lifetime; expiry wins at an observation equal to or later than the exposed deadline.
 - **LINK-FRG-048**: Intermittent bindings instead use a finite testable retention or progress rule that never retains indefinitely.
